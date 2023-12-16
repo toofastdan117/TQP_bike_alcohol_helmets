@@ -1,0 +1,2 @@
+# Ignoring all merged NTDB TQP csv files
+*.csv

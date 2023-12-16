@@ -1,0 +1,5 @@
+# Ignoring Certain Files
+.RData
+.Rhistory
+GitHub.Rproj
+.Rproj.user/

@@ -1,0 +1,1299 @@
+---
+title: "Statistical_Analysis.Rmd"
+author: "Daniel Brock"
+date: "8/2/2023"
+output: html_document
+---
+
+# Importing Packages and setting working directory
+
+```{r setup, include=FALSE}
+# Packages 
+library(tidyverse)
+library(finalfit)
+library(broom)
+library(ggfortify)
+library(patchwork)
+library(magrittr)
+library(forcats)
+library(survival)
+library(survminer)
+library(readxl)
+library(writexl)
+library(pheatmap)
+library(zoo)
+
+# Setting working directory
+cwd <- getwd()
+```
+
+# Importing merged trauma dataset from python export
+
+```{r}
+trauma <- read_csv(file = paste0(cwd, "/TQP_Processed/trauma_merged.csv"))
+comor <- read_csv(file = paste0(cwd, "/TQP_Processed/comorbidities_merged.csv"))
+adverse <- read_csv(file = paste0(cwd, "/TQP_Processed/adverse_events_merged.csv"))
+ais <- read_csv(file = paste0(cwd, "/TQP_Processed/ais_merged.csv"))
+```
+
+# Viewing the data and dropping important NA rows
+
+```{r}
+# Replacing quote marks in ecodes
+trauma$ECODE_DESC <- gsub(pattern = "\"", replacement = "", x = trauma$ECODE_DESC)
+
+# Merging trauma with comorbidities
+trauma <- merge(trauma, comor, on = "INC_KEY")
+
+# Merging trauma with adverse events
+trauma <- merge(trauma, adverse, on = "INC_KEY")
+
+# Glimpsing
+trauma_glimpse <- ff_glimpse(trauma)
+trauma_glimpse_continuous <- trauma_glimpse$Continuous
+trauma_glimpse_categorical <- trauma_glimpse$Categorical
+```
+
+# Refactoring data for table 1
+
+```{r}
+# Refactoring Sex
+trauma <- trauma %>% filter(SEX != 3) %>% mutate(
+  sex.factor = SEX %>% 
+    factor() %>% 
+    fct_recode("Male" = "1", "Female" = "2") %>% 
+    ff_label("Sex")
+)
+
+# Refactoring Age
+trauma <- trauma %>% 
+  mutate(
+    age.factor = 
+      AGEYEARS %>%
+      cut(breaks = c(0,10,20,30,40,50,60,70,100), include.lowest = TRUE, right = FALSE) %>% 
+      fct_recode(
+        "0-9"   =  "[0,10)",
+        "10-19" = "[10,20)",
+        "20-29" = "[20,30)",
+        "30-39" = "[30,40)",
+        "40-49" = "[40,50)",
+        "50-59" = "[50,60)",
+        "60-69" = "[60,70)",
+        "70+"   = "[70,100]",
+      ) %>% 
+      ff_label("Age (years)")
+    )
+
+# Refactoring Race 
+trauma <- trauma %>% mutate(
+  race.factor = case_when(
+    ASIAN == 1 ~ "Asian",
+    PACIFICISLANDER == 1 ~ "Pacific Islander",
+    RACEOTHER == 1 ~ "Other",
+    AMERICANINDIAN == 1 ~ "Native American",
+    BLACK == 1 ~ "Black",
+    WHITE == 1 ~ "White",
+    RACE_NA == 1 ~ "NA",
+    RACE_UK == 1 ~ "NA"
+  )
+)
+trauma <- trauma %>% mutate(
+  race.factor = na_if(race.factor, "NA") %>% 
+    factor(levels = c("White", "Black", "Asian", "Native American", "Pacific Islander", "Other")) %>% 
+    ff_label("Race")
+)
+
+# Refactoring Ethnicity
+trauma <- trauma %>% mutate(
+  ethnicity.factor = ETHNICITY %>% 
+    factor() %>% 
+    fct_recode("Hispanic" = "1", "Not Hispanic" = "2") %>% 
+    ff_label("Ethnicity")
+)
+
+# Refactoring Helmet Wearing
+trauma <- trauma %>% mutate(
+  helmet.factor = case_when(
+    PROTDEV_HELMET == 1 & PROTDEV_UK != 1 ~ "Helmet",
+    PROTDEV_HELMET == 0 & PROTDEV_UK != 1 ~ "No Helmet",
+    PROTDEV_UK == 1 ~ "NA"
+  )
+)
+trauma <- trauma %>% mutate(
+  helmet.factor = na_if(helmet.factor, "NA") %>% 
+    factor(levels = c("Helmet", "No Helmet")) %>% 
+    ff_label("Helmet Use")
+)
+
+# Refactoring hypotension
+trauma <- trauma %>% mutate(
+  SBP = SBP %>% ff_label("SBP mmHg")
+)
+trauma <- trauma %>% mutate(
+  sbp.hypo = case_when(
+    SBP < 90 ~ "Hypotensive",
+    SBP >= 90 ~ "Not Hypotensive"
+  ) %>% 
+    ff_label("SBP mmHg <90")
+)
+
+# Refactoring TOTALGCS
+trauma <- trauma %>% mutate(
+  TOTALGCS = TOTALGCS %>% ff_label("Total GCS")
+)
+
+
+# Multiple drug use
+trauma$total.drugs <- trauma$DRGSCR_AMPHETAMINE + trauma$DRGSCR_BARBITURATE + trauma$DRGSCR_BENZODIAZEPINES + trauma$DRGSCR_COCAINE + trauma$DRGSCR_METHAMPHETAMINE + trauma$DRGSCR_ECSTASY + trauma$DRGSCR_METHADONE + trauma$DRGSCR_OPIOID + trauma$DRGSCR_OXYCODONE + trauma$DRGSCR_PHENCYCLIDINE + trauma$DRGSCR_TRICYCLICDEPRESS + trauma$DRGSCR_CANNABINOID + trauma$DRGSCR_OTHER
+
+# Alcohol use categories
+trauma <- trauma %>% mutate(
+  alcohol.use = case_when(
+    ALCOHOLSCREENRESULT < 0.02 & total.drugs == 0 ~ "Sober",
+    ALCOHOLSCREENRESULT >= 0.02 & ALCOHOLSCREENRESULT < 0.08 & total.drugs == 0 ~ "Impaired",
+    ALCOHOLSCREENRESULT >= 0.08 & total.drugs == 0 ~ "Intoxicated"
+  ) %>% 
+    factor(levels = c("Sober", "Impaired", "Intoxicated")) %>% 
+    ff_label("Alcohol")
+)
+
+# Refactoring Drug use
+trauma <- trauma %>%
+  mutate(
+    drug.use = case_when(
+      DRGSCR_NONE == 1 & total.drugs < 1 & ALCOHOLSCREENRESULT < 0.02 ~ "None",
+      DRGSCR_AMPHETAMINE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Amphetamine",
+      DRGSCR_BARBITURATE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Barbiturate",
+      DRGSCR_BENZODIAZEPINES == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Benzodiazepines",
+      DRGSCR_COCAINE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Cocaine",
+      DRGSCR_METHAMPHETAMINE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Methamphetamine",
+      DRGSCR_ECSTASY == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Ecstasy",
+      DRGSCR_METHADONE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Methadone",
+      DRGSCR_OPIOID == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Opioids",
+      DRGSCR_OXYCODONE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Oxycodone",
+      DRGSCR_PHENCYCLIDINE == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Phencyclidine",
+      DRGSCR_TRICYCLICDEPRESS == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Tricyclic Antidepressants",
+      DRGSCR_CANNABINOID == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Cannabis",
+      DRGSCR_OTHER == 1 & total.drugs == 1 & ALCOHOLSCREENRESULT < 0.02 ~ "Other",
+      total.drugs >= 2 & ALCOHOLSCREEN < 0.02 ~ "Multiple Drugs",
+      total.drugs >= 1 & ALCOHOLSCREENRESULT >= 0.02 ~ "Drugs and Alcohol",
+      TRUE ~ NA_character_  # Add a default value
+    ) %>% 
+      factor(levels = c("None", "Cannabis", "Amphetamine", "Opioids", "Cocaine", "Benzodiazepines", "Methamphetamine", "Oxycodone", "Barbiturate", "Phencyclidine", "Tricyclic Antidepressants", "Methadone", "Ecstasy", "Drugs and Alcohol", "Other")) %>% 
+      ff_label("Drugs")
+  )
+
+# Refactoring length of hospital stay
+trauma <- trauma %>% mutate(
+  FINALDISCHARGEDAYS = FINALDISCHARGEDAYS %>% ff_label("Length of Hospital Stay (days)")
+)
+
+# Refactoring length of ICU stay
+trauma <- trauma %>% mutate(
+  TOTALICULOS = TOTALICULOS %>% ff_label("Length of ICU Stay (days)")
+)
+
+# Refactoring ISS (injury severity score)
+trauma <- trauma %>% mutate(
+  ISS = ISS %>% ff_label("Injury Severity Score")
+)
+
+trauma <- trauma %>% mutate(
+  ISS.factor = ISS %>% 
+    cut(breaks = c(0,3,8,15,24,75), include.lowest = TRUE, right = TRUE) %>% 
+    fct_recode(
+      "Minor (0-3)" = "[0,3]",
+      "Moderate (4-8)" = "(3,8]",
+      "Serious (9-15)" = "(8,15]",
+      "Severe (16-24)" = "(15,24]",
+      "Critical (>25)" = "(24,75]"
+    ) %>% 
+    ff_label("ISS Categories")
+)
+
+# Refactoring Comorbidities
+trauma <- trauma %>% mutate(
+  CC_ALCOHOLISM = CC_ALCOHOLISM %>% ff_label("Alcoholism"),
+  CC_SMOKING = CC_SMOKING %>% ff_label("Smoker"),
+  CC_SUBSTANCEABUSE = CC_SUBSTANCEABUSE %>% ff_label("Substance Abuse Disorder"),
+  CC_CHF = CC_CHF %>% ff_label("Congestive Heart Failure"),
+  CC_RENAL = CC_RENAL %>% ff_label("End Stage Renal Disease"),
+  CC_DIABETES = CC_DIABETES %>% ff_label("Diabetes"),
+  CC_HYPERTENSION = CC_HYPERTENSION %>% ff_label("Hypertension"),
+  CC_COPD = CC_COPD %>% ff_label("COPD"),
+  CC_BLEEDING = CC_BLEEDING %>% ff_label("Bleeding Disorder"),
+  CC_ANTICOAGULANT = CC_ANTICOAGULANT %>% ff_label("Anticoagulant Therapy"),
+  CC_CIRRHOSIS = CC_CIRRHOSIS %>% ff_label("Cirrosis"),
+  CC_CVA = CC_CVA %>% ff_label("Cerebrovascular Accident"),
+  CC_MENTALPERSONALITY = CC_MENTALPERSONALITY %>% ff_label("Mental/Personality Disorder")
+)
+
+# Refactoring Adverse Events
+trauma <- trauma %>% mutate(
+  HC_ALCOHOLWITHDRAWAL = HC_ALCOHOLWITHDRAWAL %>% ff_label("Alcohol Withdrawal Syndrome"),
+  HC_CARDARREST = HC_CARDARREST %>% ff_label("Cardiac Arrest"),
+  HC_DVTHROMBOSIS = HC_DVTHROMBOSIS %>% ff_label("Deep Vein Thrombosis"),
+  HC_EMBOLISM = HC_EMBOLISM %>% ff_label("Pulmonary Embolism"),
+  HC_KIDNEY = HC_KIDNEY %>% ff_label("Acute Kidney Injury"),
+  HC_RESPIRATORY = HC_RESPIRATORY %>% ff_label("Acute Respiratory Distress Syndrome"),
+  HC_SEPSIS = HC_SEPSIS %>% ff_label("Sepsis"),
+  HC_STROKECVA = HC_STROKECVA %>% ff_label("Stroke / CVA"),
+  HC_VAPNEUMONIA = HC_VAPNEUMONIA %>% ff_label("Hosipital-acquired Pneumonia"),
+  HC_INTUBATION = HC_INTUBATION %>% ff_label("Unplanned Intubation"),
+  HC_UNPLANNEDICU = HC_UNPLANNEDICU %>% ff_label("Unplanned Admission to ICU"),
+  HC_RETURNOR = HC_RETURNOR %>% ff_label("Unplanned Return to OR")
+)
+
+# Refactoring mortality using pulserate
+trauma <- trauma %>% mutate(
+  mortality.factor = case_when(
+    PULSERATE == 0 ~ "Death",
+    PULSERATE != 0 ~ "Alive"
+  ) %>% 
+    factor(levels = c("Death", "Alive")) %>% 
+    ff_label("Mortality")
+)
+
+# Refactoring alcohol withdrawal syndrome
+trauma <- trauma %>% mutate(
+  alc.withdraw.factor = HC_ALCOHOLWITHDRAWAL %>% 
+    factor() %>% 
+    fct_recode("Positive" = "1", "None" = "0") %>% 
+    ff_label("Alcohol Withdrawal Syndrome")
+)
+
+# Refactoring Year
+trauma <- trauma %>% mutate(
+  year.factor = Year %>% 
+    factor() %>% 
+    ff_label("Year")
+)
+```
+
+# Filtering for NAs in important variables
+
+```{r}
+# Filtering for NAs in selected columns
+trauma_filt <- trauma %>% filter_at(vars(sex.factor, age.factor, race.factor, ethnicity.factor, helmet.factor, SBP, sbp.hypo, TOTALGCS, 
+                                         FINALDISCHARGEDAYS, ISS, ISS.factor, CC_ALCOHOLISM, CC_SMOKING, CC_SUBSTANCEABUSE, CC_CHF, CC_RENAL, 
+                                         CC_DIABETES, CC_HYPERTENSION, CC_COPD, alc.withdraw.factor, mortality.factor), 
+                                    all_vars(!is.na(.)))
+
+# Seeing the total number of BAC screens for people with and without other drug use
+bac_screens <- trauma_filt %>% mutate(
+  alcohol.use.total = case_when(
+    ALCOHOLSCREENRESULT < 0.02 ~ "Sober",
+    ALCOHOLSCREENRESULT >= 0.02 & ALCOHOLSCREENRESULT < 0.08 ~ "Impaired",
+    ALCOHOLSCREENRESULT >= 0.08 ~ "Intoxicated"
+  ),
+  alcohol.use.clean = case_when(
+    ALCOHOLSCREENRESULT < 0.02 & total.drugs == 0 ~ "Sober",
+    ALCOHOLSCREENRESULT >= 0.02 & ALCOHOLSCREENRESULT < 0.08 & total.drugs == 0 ~ "Impaired",
+    ALCOHOLSCREENRESULT >= 0.08 & total.drugs == 0 ~ "Intoxicated"
+  )
+)
+bac_screens_total <- sum(!is.na(bac_screens$alcohol.use.total))
+bac_screens_clean <- sum(!is.na(bac_screens$alcohol.use.clean))
+print(paste0("Number of total BAC screens in patients with known info: ", bac_screens_total))
+print(paste0("Number of drug-free BAC screens in patients with known info: ", bac_screens_clean))
+
+# Filtering for only patients with BAC screens with NO other drug use (clean)
+keys_to_keep <- bac_screens[!is.na(bac_screens$alcohol.use.clean), ] %>% pull(INC_KEY)
+trauma_filt <- trauma_filt %>% filter(INC_KEY %in% keys_to_keep)
+```
+
+# Making a demographics table for alcohol use
+
+```{r}
+# Explanatory & confounding variables
+explanatory <- c("sex.factor", "age.factor", "race.factor", "ethnicity.factor")
+
+# Dependent variable of interest
+dependent <- "alcohol.use"
+
+table1 <- trauma_filt %>% 
+  summary_factorlist(dependent, explanatory,
+                     cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE)
+
+# Optional export to excel
+#write_xlsx(x = table1, path = paste0(cwd, "/tables/demographics_table1.xlsx"))
+```
+
+# Making a demographics table comparing alcohol use medical outcomes
+
+```{r}
+# Explanatory & confounding variables
+explanatory <- c("helmet.factor", 
+                 "mortality.factor", "FINALDISCHARGEDAYS", "TOTALICULOS", 
+                 "ISS", "ISS.factor", "TOTALGCS", "SBP", "sbp.hypo", 
+                 "HC_ALCOHOLWITHDRAWAL", "HC_CARDARREST", "HC_DVTHROMBOSIS", "HC_EMBOLISM", "HC_KIDNEY", "HC_RESPIRATORY", "HC_SEPSIS", "HC_STROKECVA", "HC_VAPNEUMONIA", "HC_INTUBATION", "HC_UNPLANNEDICU", "HC_RETURNOR",
+                 "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY", "CC_CHF", "CC_RENAL", "CC_DIABETES", "CC_HYPERTENSION", "CC_COPD", "CC_BLEEDING", "CC_ANTICOAGULANT", "CC_CIRRHOSIS", "CC_CVA")
+
+# Dependent variable of interest
+dependent <- "alcohol.use"
+
+table2 <- trauma_filt %>% 
+  summary_factorlist(dependent, explanatory,
+                     cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
+                     add_row_totals = FALSE)
+
+# Optional export to excel
+#write_xlsx(x = table2, path = paste0(cwd, "/tables/outcomes_table2.xlsx"))
+```
+
+# Bargraph of helmet use
+
+```{r}
+# Data wrangling
+helmet_bar_df <- table2[table2$label == "Helmet Use", ] %>% pivot_longer(cols = c("Sober", "Impaired", "Intoxicated"), names_to = "alcohol", values_to = "percent")
+helmet_bar_df$percent2 <- str_extract(helmet_bar_df$percent, "\\([^()]*\\)")
+helmet_bar_df$percent2 <- gsub(pattern = "\\(", replacement = "", x = helmet_bar_df$percent2)
+helmet_bar_df$percent2 <- gsub(pattern = "\\)", replacement = "", x = helmet_bar_df$percent2)
+helmet_bar_df$percent2 <- as.numeric(helmet_bar_df$percent2)
+helmet_bar_df$alcohol <- factor(helmet_bar_df$alcohol, levels = c("Sober", "Impaired", "Intoxicated"))
+
+# Barplot
+helmet_bar_plot <- helmet_bar_df %>% ggplot(aes(x = alcohol, y = percent2, fill = alcohol)) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = percent2), vjust = -0.5) +
+  scale_y_continuous(limits = c(0, 50), expand = c(0,0)) + 
+  scale_fill_manual(values = c("#89C5D3", "#FEDBB2", "#E8ACBD")) + 
+  labs(x = "BAC Intoxication Status", y = "Percent Wearing a Helmet (%)", title = "Helmet Usage in Alcohol Screening Groups") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12),
+        legend.position = "none")
+helmet_bar_plot
+
+# Optional Save 
+#ggsave(plot = helmet_bar_plot, filename = paste0(cwd, "/figures/helmet_use_barplot.pdf"), width = 1500, height = 1500, dpi = 300, units = "px")
+```
+
+# Bargraph of comorbidities
+
+```{r}
+# Data wrangling
+comor_df <- read_xlsx(path = paste0(cwd, "/tables/outcomes_table2.xlsx"), col_names = c("label", "Comorbidities", "Sober", "Impaired", "Intoxicated", "p"))
+comor_df <- comor_df %>% select(-c(label, p))
+comor_df <- comor_df[comor_df$Comorbidities %in% c("Alcoholism", "Smoker", "Substance Abuse Disorder", "Mental/Personality Disorder"), ]
+comor_df$Comorbidities <- gsub(comor_df$Comorbidities, pattern = "Substance Abuse Disorder", replacement = "Substance Abuse")
+comor_df$Comorbidities <- gsub(comor_df$Comorbidities, pattern = "Mental/Personality Disorder", replacement = "Mental Disorder")
+comor_df <- comor_df %>% pivot_longer(cols = c("Sober", "Impaired", "Intoxicated"), names_to = "Intoxication_Status", values_to = "Percent")
+comor_df$Comorbidities <- factor(x = comor_df$Comorbidities, levels = c("Alcoholism", "Smoker", "Substance Abuse", "Mental Disorder"))
+comor_df$Intoxication_Status <- factor(x = comor_df$Intoxication_Status, levels = c("Sober", "Impaired", "Intoxicated"))
+comor_df$Percent <- str_extract(comor_df$Percent, "\\([^()]*\\)")
+comor_df$Percent <- gsub(pattern = "\\(", replacement = "", x = comor_df$Percent)
+comor_df$Percent <- gsub(pattern = "\\)", replacement = "", x = comor_df$Percent)
+comor_df$Percent <- as.numeric(comor_df$Percent)
+
+# Grouped Barplot
+comor_bar_plot <- comor_df %>% ggplot(aes(x = Comorbidities, y = Percent, group = Intoxication_Status, fill = Intoxication_Status)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  scale_y_continuous(limits = c(0, 35), expand = c(0,0)) + 
+  scale_fill_manual(values = c("#89C5D3", "#FEDBB2", "#E8ACBD")) + 
+  labs(x = "Comorbidities", y = "Percent of Intoxication Groups with Comorbidity (%)", title = "Comorbidities in Alcohol Screening Groups", fill = "Intoxication Status") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12))
+comor_bar_plot
+
+# Optional Save 
+#ggsave(plot = comor_bar_plot, filename = paste0(cwd, "/figures/comorbidities.pdf"), width = 2500, height = 1500, dpi = 300, units = "px")
+```
+
+# Yearly plot to get time-data for COVID
+
+```{r}
+# Yearly alcohol use and helmet use data
+yearly <- trauma_filt %>% group_by(Year, alcohol.use) %>% 
+  summarise(n_count = n(),
+            BAC = mean(ALCOHOLSCREENRESULT))
+year_helmet <- trauma_filt %>% group_by(Year, helmet.factor) %>% 
+  summarise(helmet_counts = n()) 
+year_helmet <- year_helmet %>% pivot_wider(id_cols = c("Year"), names_from = "helmet.factor", values_from = "helmet_counts")
+year_counts <- trauma_filt %>% group_by(Year) %>% 
+  summarise(yearly_counts = n())
+
+# Merging yearly alcohol use and helmet use data
+year_helmet <- merge(year_helmet, year_counts, by = "Year")
+year_helmet$percent <- year_helmet$Helmet / year_helmet$yearly_counts
+year_helmet$category <- "Helmet Use per Year"
+year_helmet$alcohol.use <- "not_available"
+yearly <- merge(yearly, year_counts, by = "Year")
+yearly$percent <- yearly$n_count / yearly$yearly_counts
+yearly$category <- "Intoxication Rates per Year"
+
+# Yearly bike injury frequency (from python)
+n_year <- table(trauma$Year) %>% as.data.frame()
+n_year$Var1 <- as.numeric(as.character(n_year$Var1))
+n_year$totals <- c(997970, 1043736, 1097190, 1133053, 1209097)
+n_year$percent <- n_year$Freq / n_year$totals
+colnames(n_year) <- c("Year", "Freq", "total_bike_injuries", "percent")
+n_year$category <- "Pedal Cyclist Trauma Frequency"
+n_year$alcohol.use <- "not_available"
+
+# Merging to one dataframe
+yearly_graphing <- bind_rows(yearly, year_helmet, n_year)
+yearly_graphing$category <- factor(x = yearly_graphing$category, levels = c("Pedal Cyclist Trauma Frequency", "Intoxication Rates per Year", "Helmet Use per Year"))
+yearly_graphing$alcohol.use <- factor(x = yearly_graphing$alcohol.use, levels = c("Sober", "Impaired", "Intoxicated", "not_available"))
+yearly_graphing$percent <- yearly_graphing$percent * 100
+
+
+# Statistics on yearly intoxication rates
+# Dependent variable of interest
+dependent <- "year.factor"
+# Explanatory & confounding variables
+explanatory <- c("alcohol.use", "helmet.factor")
+# Table
+table4 <- trauma_filt %>% summary_factorlist(dependent, explanatory, 
+                                             p_cat = "chisq", p = TRUE)
+
+# Optional export to excel
+#write_xlsx(x = table4, path = paste0(cwd, "/tables/yearly_analysis_table4.xlsx"))
+```
+
+```{r}
+# Plotting
+`%notin%` <- Negate(`%in%`)
+year_line_plot <- yearly_graphing %>% filter(alcohol.use %notin% c("Sober", "Impaired")) %>% 
+  ggplot(aes(x = Year, y = percent, color = alcohol.use)) +
+  geom_line(size = 1) +  
+  geom_point(size = 2) +
+  facet_wrap(~ category, ncol = 3, scales = "free_y") + 
+  #scale_color_manual(values = c("#fb8804", "#c83760", "#808080")) + 
+  scale_color_manual(values = c("black", "black")) + 
+  labs(x = "Year", title = "Yearly Pedalcyclist Trauma Accidents", color = "Intoxication Status") + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, size = 20),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16))
+year_line_plot
+
+# Optional Save 
+#ggsave(plot = year_line_plot, filename = paste0(cwd, "/figures/yearly_bike_injuries.pdf"), width = 4300, height = 1400, dpi = 300, units = "px")
+```
+
+
+
+
+# Logistic Regression Analysis
+
+```{r}
+# Cleaning the trauma df for logistic regression
+trauma_filt_lr <- trauma_filt %>% 
+  select(sex.factor, AGEYEARS, age.factor, race.factor, ethnicity.factor, ALCOHOLSCREENRESULT, alcohol.use, helmet.factor,
+         CC_ALCOHOLISM, CC_SMOKING, CC_SUBSTANCEABUSE, CC_MENTALPERSONALITY) %>% 
+  mutate(
+    sex.factor = sex.factor %>% factor(levels = c("Female", "Male")) %>% ff_label("Sex"),
+    ethnicity.factor = ethnicity.factor %>% factor(levels = c("Not Hispanic", "Hispanic")) %>% ff_label("Ethnicity"),
+    CC_ALCOHOLISM = CC_ALCOHOLISM %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Alcoholism"),
+    CC_SMOKING = CC_SMOKING %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Smoking"),
+    CC_SUBSTANCEABUSE = CC_SUBSTANCEABUSE %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Substance Abuse"),
+    CC_MENTALPERSONALITY = CC_MENTALPERSONALITY %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Mental/Personality Disorder")
+    )
+
+# Performing Logistic Regression and testing different variables in the model
+dependent <- "helmet.factor"
+explanatory <- c("sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+                 "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
+explanatory_multi <- c("race.factor", "ethnicity.factor", "alcohol.use", 
+                       "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
+logistic_fit <- trauma_filt_lr %>% 
+  finalfit(dependent, explanatory, explanatory_multi, keep_models = TRUE, metrics = TRUE)
+logistic_fit1 <- logistic_fit[[1]] %>% as.data.frame()
+logistic_fit2 <- logistic_fit[[2]] %>% as.character()
+print(logistic_fit2)
+```
+
+```{r}
+# Final logisitic regression to export
+dependent <- "helmet.factor"
+explanatory <- c("sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+                 "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
+logistic_fit <- trauma_filt_lr %>% 
+  finalfit(dependent, explanatory, metrics = TRUE)
+logistic_fit1 <- logistic_fit[[1]] %>% as.data.frame()
+logistic_fit2 <- logistic_fit[[2]] %>% as.character()
+print(logistic_fit2)
+
+# Exporting to excel
+#write_xlsx(x = logistic_fit1, path = paste0(cwd, "/tables/logistic_regression.xlsx"))
+```
+
+```{r}
+# Odds ratio Plot
+dependent <- "helmet.factor"
+explanatory <- c("sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+                 "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
+#pdf(file = paste0(cwd, "/figures/odds_ratio_plot2.pdf"), height = 6, width = 9)
+trauma_filt_lr %>% 
+  or_plot(dependent, explanatory,
+          remove_ref = TRUE,
+          breaks = c(0, 1, 2, 3, 4, 5, 6, 7, 8),
+          table_text_size = 3.5,
+          title_text_size = 16)
+#dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+# Density plot of transformed length of hospital stay
+
+```{r}
+# Transforming data
+los <- trauma_filt %>% select(INC_KEY, alcohol.use, FINALDISCHARGEHRS, FINALDISCHARGEDAYS, TOTALICULOS) %>% filter(!is.na(alcohol.use)) %>% arrange(FINALDISCHARGEDAYS)
+los$FINALDISCHARGEDAYS_log <- log(x = los$FINALDISCHARGEDAYS)
+los$FINALDISCHARGEDAYS_log10 <- log10(x = los$FINALDISCHARGEDAYS)
+#log$FINALDISCHARGEHRS_sqrt <- sqrt(x = los$FINALDISCHARGEHRS)
+los$FINALDISCHARGEHRS_log <- log(x = los$FINALDISCHARGEHRS)
+los$FINALDISCHARGEHRS_log10 <- log10(x = los$FINALDISCHARGEHRS)
+
+# Plotting
+los_plot <- los %>% ggplot(aes(x = FINALDISCHARGEDAYS_log, color = alcohol.use)) + 
+  geom_density(size = 1) + 
+  scale_color_manual(values = c("#89C5D3", "#fdb768", "#ff6666")) + 
+  labs(x = "log(Length of Hospital Stay (days)", y = "Density", title = "Length of Hospital Stay Density", color = "Intoxication Status") + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12))
+los_plot
+
+# Optional Save 
+#ggsave(plot = los_plot, filename = paste0(cwd, "/figures/length_of_stay_density.pdf"), width = 2200, height = 1500, dpi = 300, units = "px")
+```
+
+# Kaplan Meier analysis of alcohol groups
+
+```{r}
+#BROKEN
+
+# Transforming data
+los <- trauma_filt %>% select(INC_KEY, alcohol.use, FINALDISCHARGEHRS, FINALDISCHARGEDAYS, TOTALICULOS) %>% filter(!is.na(alcohol.use)) %>% arrange(FINALDISCHARGEDAYS)
+los$FINALDISCHARGEDAYS_log <- log(x = los$FINALDISCHARGEDAYS)
+los$FINALDISCHARGEDAYS_log10 <- log10(x = los$FINALDISCHARGEDAYS)
+
+# Making a df for all patients for each timepoint
+df_list <- list()
+for (i in unique(los$FINALDISCHARGEDAYS_log)) {
+  df <- los %>% select(INC_KEY, alcohol.use)
+  df$FINALDISCHARGEDAYS_log <- i
+  df_list[[length(df_list) + 1]] <- df
+}
+los2 <- bind_rows(df_list)
+
+# Annotating with actual timepoint and checking to see if the patient was in the hospital at that time
+los_filt <- los %>% select(INC_KEY, FINALDISCHARGEDAYS_log)
+colnames(los_filt) <- c("INC_KEY", "ACTUAL_LOS")
+los2 <- merge(los2, los_filt, by = "INC_KEY")
+los2 <- los2 %>% group_by(INC_KEY, ACTUAL_LOS) %>% 
+  mutate(los_check = case_when(
+    FINALDISCHARGEDAYS_log <= ACTUAL_LOS ~ 1,
+    FINALDISCHARGEDAYS_log > ACTUAL_LOS ~ 0
+  ))
+los2 <- los2 %>% arrange(INC_KEY, FINALDISCHARGEDAYS_log)
+
+# Using the survival package to make Kaplan Meier curves (note: using magrittr pipes)
+survival_object <- los2 %$% Surv(FINALDISCHARGEDAYS_log, los_check)
+head(survival_object)
+
+# Making a Kaplan Meier plot
+dependent <- "Surv(FINALDISCHARGEDAYS_log, los_check)"
+explanatory <- c("alcohol.use")
+los2 %>% surv_plot(dependent, explanatory, pval = TRUE)
+```
+
+
+
+
+
+
+
+# Alcohol AIS analysis 
+
+```{r}
+ais_filt <- ais[ais$INC_KEY %in% trauma_filt$INC_KEY, ]
+ais_filt <- ais_filt[ais_filt$AISSEVERITY != 9, ] #filtering unknown severity scores
+
+ais_glimpse <- ff_glimpse(ais_filt)
+ais_glimpse_cont <- ais_glimpse[[1]]
+ais_glimpse_cat <- ais_glimpse[[2]]
+```
+
+```{r}
+alc_sober_keys <- trauma_filt %>% filter(alcohol.use == "Sober") %>% pull(INC_KEY)
+alc_impair_keys <- trauma_filt %>% filter(alcohol.use == "Impaired") %>% pull(INC_KEY)
+alc_intox_keys <- trauma_filt %>% filter(alcohol.use == "Intoxicated") %>% pull(INC_KEY)
+
+ais_filt <- ais_filt %>% mutate(
+  alcohol.use = case_when(
+    INC_KEY %in% alc_sober_keys ~ "Sober",
+    INC_KEY %in% alc_impair_keys ~ "Impaired",
+    INC_KEY %in% alc_intox_keys ~ "Intoxicated"
+  )
+)
+
+# Filtering for NAs in selected columns
+ais_filt <- ais_filt %>% filter_at(vars(AISPREDOT, AISSEVERITY, AISSEVERITY, ISSREGION, alcohol.use), all_vars(!is.na(.)))
+
+# Refactoring ISS region
+ais_filt <- ais_filt %>% mutate(
+  ISSREGION.factor = ISSREGION %>% 
+    factor() %>% 
+    fct_recode(
+      "Head & Neck" = "1",
+      "Chest" = "2",
+      "Abdominal & Pelvic" = "3",
+      "Extremities" = "4",
+      "Face" = "5",
+      "External" = "6"
+  ) %>% 
+    ff_label("ISS Region"),
+  
+  AISSEVERITY = AISSEVERITY %>% 
+    factor() %>% 
+    ff_label("AIS Severity Score"),
+  
+  alcohol.use = alcohol.use %>% 
+    factor(levels = c("Sober", "Impaired", "Intoxicated")) %>% 
+    ff_label("Alcohol Use")
+)
+ais_filt <- ais_filt %>% mutate(
+  ISSREGION = as.numeric(ISSREGION),
+  AISSEVERITY = as.numeric(AISSEVERITY)
+)
+```
+
+```{r}
+# Filters for mild and severe AIS injury scores
+ais_filt_mild <- ais_filt[ais_filt$AISSEVERITY %in% c("1,", "2"), ]
+ais_filt_severe <- ais_filt[ais_filt$AISSEVERITY %in% c("3,", "4,", "5", "6"), ]
+
+# Explanatory & confounding variables
+explanatory <- c("ISSREGION.factor", "AISSEVERITY")
+
+# Explanatory variable of interest
+dependent <- "alcohol.use"
+
+table3.1 <- ais_filt %>% 
+  summary_factorlist(dependent, explanatory, 
+                     cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE)
+table3.1$severity <- "All"
+
+table3.2 <- ais_filt_severe %>% 
+  summary_factorlist(dependent, explanatory, 
+                     cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE)
+table3.2$severity <- "Severe"
+
+table3 <- bind_rows(table3.1, table3.2)
+
+# Optional export to excel
+#write_xlsx(x = table3, path = paste0(cwd, "/tables/ais_alcohol_table.xlsx"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Functions
+
+```{r}
+# Standard Error Calculations
+stderror <- function(x) {
+  std_error_mean <- sd(x) / sqrt(length(x))
+  return(std_error_mean)
+}
+```
+
+```{r}
+# Demographic info calculations: requires a "trauma_df" from the merged trauma csv
+# Returns a named list of demographic information
+demographics <- function(trauma_df) {
+  
+  # Sex demographics
+  n_sex <- table(trauma_df$SEX) %>% as.data.frame()
+  n_sex$percent <- (n_sex$Freq / sum(n_sex$Freq)) * 100
+  n_sex$variable <- "sex"
+  
+  # Age demographics
+  n_age <- trauma_df %>% mutate(
+    age_groups = case_when(
+      AGEYEARS < 10 ~ "0-9",
+      AGEYEARS >= 10 & AGEYEARS < 20 ~ "10-19",
+      AGEYEARS >= 20 & AGEYEARS < 30 ~ "20-29",
+      AGEYEARS >= 30 & AGEYEARS < 40 ~ "30-39",
+      AGEYEARS >= 40 & AGEYEARS < 50 ~ "40-49",
+      AGEYEARS >= 50 & AGEYEARS < 60 ~ "50-59",
+      AGEYEARS >= 60 & AGEYEARS < 70 ~ "60-69",
+      AGEYEARS >= 70 ~ "70+",
+    )
+  )
+  n_age <- table(n_age$age_groups) %>% as.data.frame()
+  n_age$percent <- (n_age$Freq / sum(n_age$Freq)) * 100
+  n_age$variable <- "age"
+  
+  # Ethnicity Demographics
+  n_eth <- table(trauma_df$ETHNICITY) %>% as.data.frame()
+  n_eth$percent <- (n_eth$Freq / sum(n_eth$Freq)) * 100
+  n_eth$variable <- "ethnicity"
+  
+  # Race Demographics
+  races <- c("ASIAN", "PACIFICISLANDER", "RACEOTHER", "AMERICANINDIAN", "BLACK", "WHITE", "RACE_NA", "RACE_UK")
+  x_race <- trauma_df %>% select(all_of(races))
+  n_race <- colSums(x = x_race) %>% as.data.frame()
+  n_race <- n_race %>% tibble::rownames_to_column(var = "Var1")
+  colnames(n_race) <- c("Var1", "Freq")
+  n_race$percent <- (n_race$Freq / sum(n_race$Freq)) * 100
+  n_race$variable <- "race"
+  
+  # Helmet Use Demographics
+  trauma_helmet <- trauma_df %>% filter(PROTDEV_UK != 1)
+  prot <- c("PROTDEV_NONE", "PROTDEV_HELMET")
+  x_prot <- trauma_helmet %>% select(all_of(prot))
+  n_helmet <- colSums(x = x_prot) %>% as.data.frame()
+  n_helmet <- n_helmet %>% tibble::rownames_to_column(var = "Var1")
+  colnames(n_helmet) <- c("Var1", "Freq")
+  n_helmet$percent <- (n_helmet$Freq / sum(n_helmet$Freq)) * 100
+  n_helmet$variable <- "helmet"
+  
+  # Ecode Demographics
+  n_ecodes <- table(trauma_df$ECODE_DESC) %>% as.data.frame()
+  n_ecodes$percent <- (n_ecodes$Freq / sum(n_ecodes$Freq)) * 100
+  n_ecodes <- n_ecodes %>% dplyr::arrange(-percent)
+  n_ecodes$variable <- "ecodes"
+  
+  # Returning a list of demographics dataframes
+  demo_list <- list(n_sex, n_age, n_eth, n_race, n_helmet, n_ecodes)
+  names(demo_list) <- c("sex", "age", "ethnicity", "race", "helmet", "ecodes")
+  return(demo_list)
+}
+```
+
+```{r}
+# Function to make a Pie Chart
+plot_pie <- function(df, freq, fill, title) {
+  pie <- ggplot(df, aes(x = "", y = freq, fill = fill)) + 
+    geom_bar(stat = "identity", width = 1, size = 1, color = "white") + 
+    coord_polar("y") +
+    scale_x_discrete(expand = c(0, 0)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    geom_text(aes(label = paste0(round(percent, 0), "%")),
+              position = position_stack(vjust = 0.5)) +
+    labs(x = NULL, y = NULL, fill = NULL, title = title) + 
+    theme_classic() + 
+    theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5))
+  return(pie)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# Making a demographics table comparing drug use
+
+```{r}
+# Explanatory & confounding variables
+explanatory <- c("sex.factor", "age.factor", "race.factor", "ethnicity.factor", "helmet.factor", "SBP", "sbp.hypo", "TOTALGCS", "FINALDISCHARGEDAYS", "ISS", "ISS.factor", "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_CHF", "CC_RENAL", "CC_DIABETES", "CC_HYPERTENSION", "CC_COPD")
+
+# Explanatory variable of interest
+dependent <- "drug.use"
+
+table3 <- trauma_filt %>% 
+  filter(drug.use %in% c("None", "Cannabis", "Amphetamine", "Opioids", "Cocaine", "Benzodiazepines", "Methamphetamine", "Drugs and Alcohol"))
+table3$drug.use <- factor(x = table3$drug.use, levels = c("None", "Cannabis", "Amphetamine", "Opioids", "Cocaine", "Benzodiazepines", "Methamphetamine", "Drugs and Alcohol"))
+table3 <- table3 %>%   
+  summary_factorlist(dependent, explanatory,
+                     cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE)
+
+# Optional export to excel
+#write_xlsx(x = table3, path = paste0(cwd, "/figures/demographics_drug_table.xlsx"))
+```
+
+```{r}
+table3 %>% hr_plot(dependent, explanatory)
+```
+
+
+
+# Drug use AIS analysis
+
+```{r}
+drug_clean_keys <- trauma_filt %>% filter(drug.use == "None") %>% pull(INC_KEY)
+drug_cannabis_keys <- trauma_filt %>% filter(drug.use == "Cannabis") %>% pull(INC_KEY)
+drug_multi_keys <- trauma_filt %>% filter(drug.use == "Drugs and Alcohol") %>% pull(INC_KEY)
+
+ais_filt <- ais_filt %>% mutate(
+  drug.use = case_when(
+    INC_KEY %in% drug_clean_keys ~ "None",
+    INC_KEY %in% drug_cannabis_keys ~ "Cannabis",
+    INC_KEY %in% drug_multi_keys ~ "Drugs and Alcohol"
+  )
+)
+
+# Filtering for NAs in selected columns
+ais_filt <- ais_filt %>% filter_at(vars(AISPREDOT, AISSEVERITY, AISSEVERITY, ISSREGION, drug.use), all_vars(!is.na(.)))
+
+# Refactoring ISS region
+ais_filt <- ais_filt %>% mutate(
+  ISSREGION.factor = ISSREGION %>% 
+    factor() %>% 
+    fct_recode(
+      "Head & Neck" = "1",
+      "Chest" = "2",
+      "Abdominant & Pelvic" = "3",
+      "Extremities" = "4",
+      "Face" = "5",
+      "External" = "6"
+  ) %>% 
+    ff_label("ISS Region"),
+  
+  AISSEVERITY = AISSEVERITY %>% 
+    factor() %>% 
+    ff_label("AIS Severity Score"),
+  
+  drug.use = drug.use %>% 
+    factor(levels = c("None", "Cannabis", "Drugs and Alcohol"))
+)
+```
+
+```{r}
+# Explanatory & confounding variables
+explanatory <- c("AISSEVERITY", "ISSREGION.factor")
+
+# Explanatory variable of interest
+dependent <- "drug.use"
+
+table5 <- ais_filt %>% 
+  summary_factorlist(dependent, explanatory, 
+                     p_cat = "chisq", p = TRUE)
+
+# Optional export to excel
+#write_xlsx(x = table5, path = paste0(cwd, "/figures/ais_drug_table.xlsx"))
+```
+
+
+
+
+
+
+
+
+
+# Getting Demographic information for everyone
+
+```{r}
+# Demographics
+demo_total <- demographics(trauma_df = trauma)
+demo_total_merged <- Reduce(x = demo_total, f = "full_join")
+
+# Optional Export to excel
+#write_xlsx(x = demo_total_merged, path = paste0(cwd, "/tables/total_demographics_table.xlsx"))
+```
+
+```{r}
+# Pie Chart of sex demographics
+n_sex <- demo_total[["sex"]]
+n_sex$sex <- c("Male", "Female", "Other")
+
+plot_pie_sex <- plot_pie(df = n_sex, freq = n_sex$Freq, fill = n_sex$sex, title = "Sex Demographics of Pedal Cyclist Injuries")
+plot_pie_sex <- plot_pie_sex + scale_fill_manual(values = c("#03bafc", "#f0796e", "#999999")) 
+plot_pie_sex
+
+# Optional Save 
+#ggsave(plot = plot_pie_sex, filename = paste0(cwd, "/figures/total_sex_pie_chart.png"), width = 1500, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Pie Chart of race demographics
+n_race <- demo_total[["race"]]
+n_race$race <- str_to_lower(n_race$Var1)
+colnames(n_race) <- c("Var1", "Freq", "percent", "variable", "race")
+n_race$percent <- (n_race$Freq / sum(n_race$Freq)) * 100
+
+plot_pie_race <- plot_pie(df = n_race, freq = n_race$Freq, fill = n_race$race, title = "Race Demographics of Pedal Cyclist Injuries")
+plot_pie_race <- plot_pie_race + scale_fill_brewer(palette = "Set1")
+plot_pie_race
+
+# Optional Save 
+#ggsave(plot = plot_pie_race, filename = paste0(cwd, "/figures/total_race_pie_chart.png"), width = 1500, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Year line plot
+n_year <- table(trauma$Year) %>% as.data.frame()
+n_year$Var1 <- as.numeric(as.character(n_year$Var1))
+n_year$totals <- c(997970, 1043736, 1097190, 1133053, 1209097)
+n_year$proportion <- (n_year$Freq / n_year$totals) * 100
+
+year_line_plot <- ggplot(n_year, aes(x = Var1)) + 
+  geom_line(aes(y = Freq), color = "black", size = 1) +  
+  geom_line(aes(y = proportion * 10000), color = "red", size = 1) +
+  scale_y_continuous(name = "Total Pedalcyclist Injuries", sec.axis = sec_axis(~./10000, name = "Proportion of Total (%)")) + 
+  labs(x = "Year", title = "Yearly Pedalcyclist Trauma Accidents") + 
+  theme_bw() + 
+  theme(axis.title.y.right = element_text(angle = 90, color = "red"),
+        axis.text.y.right = element_text(color = "red"),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "none")
+year_line_plot
+
+# Optional Save 
+#ggsave(plot = year_line_plot, filename = paste0(cwd, "/figures/yearly_bike_injuries.png"), width = 2500, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Age Histogram
+plot_hist_age <- ggplot(trauma, aes(x = AGEYEARS)) + 
+  geom_histogram(binwidth = 2, fill = "#b5b5b5", color = "black") +
+  scale_y_continuous(expand = c(0,0)) + 
+  scale_x_continuous(breaks = seq(0, 90, by = 5)) + 
+  labs(x = "Age (years)", y = "Counts", title = "Age Distribution") + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_hist_age
+
+# Optional Save 
+#ggsave(plot = plot_hist_age, filename = paste0(cwd, "/figures/total_age_histogram.png"), width = 2500, height = 1500, dpi = 300, units = "px")
+```
+
+
+ 
+
+
+
+```{r}
+# Discharge time
+final_discharge_hrs_mean <- mean(trauma$FINALDISCHARGEHRS, na.rm = TRUE)
+final_discharge_hrs_median <- median(trauma$FINALDISCHARGEHRS, na.rm = TRUE)
+
+# Injury Severity Score (ISS)
+iss_mean <- mean(trauma$ISS, na.rm = TRUE)
+iss_median <- median(trauma$ISS, na.rm = TRUE)
+iss_IQR <- IQR(x = trauma$ISS, na.rm = TRUE)
+
+# Injury Severity and Region Scores
+ais_region <- table(ais$ISSREGION) %>% as.data.frame()
+ais_sev_per_patient <- ais %>% dplyr::group_by(INC_KEY) %>% 
+  summarise(mean_AISSEVERITY = mean(AISSEVERITY), max_AISSEVERITY = max(AISSEVERITY), n_injuries = n())
+ais_mean_sev <- mean(ais_sev_per_patient$mean_AISSEVERITY, na.rm = TRUE)
+ais_median_sev <- median(ais_sev_per_patient$mean_AISSEVERITY, na.rm = TRUE)
+ais_mean_max_sev <- mean(ais_sev_per_patient$max_AISSEVERITY, na.rm = TRUE)
+number_injuries_mean <- mean(ais_sev_per_patient$n_injuries, na.rm = TRUE)
+number_injuries_median <- median(ais_sev_per_patient$n_injuries, na.rm = TRUE)
+```
+
+
+
+# Getting Demographic information for alcohol intoxicated individuals
+# Filtering for Alcohol testing and separating based on intoxication status
+
+```{r}
+# Filtering for alcohol screen results
+trauma_alc <- trauma %>% dplyr::filter(!is.na(ALCOHOLSCREENRESULT))
+trauma_alc_sober <- trauma_alc %>% dplyr::filter(ALCOHOLSCREENRESULT < 0.03)
+trauma_alc_impaired <- trauma_alc %>% dplyr::filter(ALCOHOLSCREENRESULT >= 0.03 & ALCOHOLSCREENRESULT < 0.08)
+trauma_alc_intox <- trauma_alc %>% dplyr::filter(ALCOHOLSCREENRESULT >= 0.08)
+```
+
+```{r}
+# Demographics total alcohol tested 
+demo_alc <- demographics(trauma_df = trauma_alc)
+demo_alc_merged <- Reduce(x = demo_alc, f = "full_join")
+#write_xlsx(x = demo_alc_merged, path = paste0(cwd, "/tables/total_alcohol_demographics_table.xlsx"))
+
+# Demographics sober 
+demo_sober <- demographics(trauma_df = trauma_alc_sober)
+demo_sober_merged <- Reduce(x = demo_sober, f = "full_join")
+#write_xlsx(x = demo_sober_merged, path = paste0(cwd, "/tables/sober_demographics_table.xlsx"))
+
+# Demographics impaired
+demo_impaired <- demographics(trauma_df = trauma_alc_impaired)
+demo_impaired_merged <- Reduce(x = demo_impaired, f = "full_join")
+#write_xlsx(x = demo_impaired_merged, path = paste0(cwd, "/tables/impaired_demographics_table.xlsx"))
+
+# Demographics intoxicated
+demo_intox <- demographics(trauma_df = trauma_alc_intox)
+demo_intox_merged <- Reduce(x = demo_intox, f = "full_join")
+#write_xlsx(x = demo_intox_merged, path = paste0(cwd, "/tables/intoxicated_demographics_table.xlsx"))
+```
+
+```{r}
+# glascow coma scores
+g0 <- mean(trauma_alc$TOTALGCS, na.rm = TRUE)
+g1 <- mean(trauma_alc_sober$TOTALGCS, na.rm = TRUE)
+g2 <- mean(trauma_alc_impaired$TOTALGCS, na.rm = TRUE)
+g3 <- mean(trauma_alc_intox$TOTALGCS, na.rm = TRUE)
+```
+
+```{r}
+# Injury severity scores (ISS)
+i0 <- mean(trauma_alc$ISS, na.rm = TRUE)
+i1 <- mean(trauma_alc_sober$ISS, na.rm = TRUE)
+i2 <- mean(trauma_alc_impaired$ISS, na.rm = TRUE)
+i3 <- mean(trauma_alc_intox$ISS, na.rm = TRUE)
+```
+
+```{r}
+# Length of stay
+s0 <- mean(trauma_alc$FINALDISCHARGEHRS, na.rm = TRUE)
+s1 <- mean(trauma_alc_sober$FINALDISCHARGEHRS, na.rm = TRUE)
+s2 <- mean(trauma_alc_impaired$FINALDISCHARGEHRS, na.rm = TRUE)
+s3 <- mean(trauma_alc_intox$FINALDISCHARGEHRS, na.rm = TRUE)
+```
+
+```{r}
+# Density Plot
+trauma_alc_sober$intoxication <- "Sober"
+trauma_alc_impaired$intoxication <- "Impaired"
+trauma_alc_intox$intoxication <- "Intoxicated"
+alc_dense <- rbind(trauma_alc_sober, trauma_alc_impaired, trauma_alc_intox)
+alc_dense$intoxication <- factor(x = alc_dense$intoxication, levels = c("Intoxicated", "Impaired", "Sober"))
+```
+
+```{r}
+# Density Plot of Final Discharge Hours
+upper_limit = 1500
+over_threshold <- alc_dense %>% dplyr::filter(FINALDISCHARGEHRS > upper_limit) %>% nrow()
+
+# Upper outlier threshold
+interquart <- IQR(x = alc_dense$FINALDISCHARGEHRS, na.rm = TRUE)
+quart75 <- as.numeric(quantile(x = alc_dense$FINALDISCHARGEHRS, probs = c(0.75), na.rm = TRUE))
+upper_threshold <- quart75 + (1.5 * interquart)
+
+# Plotting density plot
+alc_density_plot <- ggplot(alc_dense, aes(x = FINALDISCHARGEHRS, group = intoxication, fill = intoxication)) + 
+  geom_density(adjust = 1.5, position = "fill") + 
+  geom_vline(xintercept = upper_threshold, linetype = "dashed") +
+  scale_fill_manual(values = c("#bf1313", "#ffad6e", "#6eccff")) + 
+  coord_cartesian(xlim = c(0, 1500)) + 
+  scale_x_continuous(expand = c(0, 0)) + 
+  scale_y_continuous(expand = c(0, 0)) + 
+  labs(title = "Length of Stay", x = paste0("Length of Stay (hours) - ", over_threshold, " are over ", upper_limit), y = "Density") + 
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+  
+alc_density_plot
+
+# Optional Save 
+#ggsave(plot = alc_density_plot, filename = paste0(cwd, "/figures/alcohol_length_of_stay_density.png"), width = 2500, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Helmet Statistics
+contingency_table <- table(alc_dense$intoxication, alc_dense$PROTDEV_HELMET)
+chi_sq_results <- chisq.test(contingency_table)
+pval_chi <- pchisq(q = chi_sq_results$statistic, df = chi_sq_results$parameter)
+
+# Helmet Tidying for plotting
+helm <- as.data.frame.matrix(contingency_table)
+colnames(helm) <- c("none", "yes")
+helm$totals <- rowSums(helm)
+helm$percent <- (helm$yes / helm$totals) * 100
+helm <- helm %>% tibble::rownames_to_column(var = "intoxication")
+helm$intoxication <- factor(x = helm$intoxication, levels = c("Sober", "Impaired", "Intoxicated"))
+
+# Plotting helmet bargraph with p value
+title_label <- "Alcohol Intoxication is Associated with Reduced Helmet Use\np-value < 2.2e-16"
+helm_bar_plot <- ggplot(helm, aes(x = intoxication, y = percent, fill = intoxication)) + 
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = c("#6eccff", "#ffad6e", "#bf1313")) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  labs(x = "Alcohol Intoxication Status", y = "Percent Pedalcyclists Wearing a Helmet within Group", title = title_label) +
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5))
+helm_bar_plot
+
+# Optional Save 
+#ggsave(plot = helm_bar_plot, filename = paste0(cwd, "/figures/alcohol_helmet_barplot.png"), width = 2200, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Are alcohol-associated accidents more related to car collisions? 
+icd_ecode <- read_excel(path = paste0(cwd, "/tables/ICD10_codes.xlsx"))
+icd_cars <- icd_ecode[icd_ecode$Car_Involved == 1, ] %>% pull(Ecode)
+icd_nocars <- icd_ecode[icd_ecode$Car_Involved == 0, ] %>% pull(Ecode)
+
+alc_dense <- alc_dense %>% mutate(car_involved = case_when(
+  ECODE_DESC %in% icd_cars ~ "motor_vehicle_involved",
+  ECODE_DESC %in% icd_nocars ~ "no_motor_vehicle_involved"
+))
+
+contingency_table <- table(alc_dense$intoxication, alc_dense$car_involved)
+chi_sq_results = chisq.test(contingency_table)
+
+car <- as.data.frame.matrix(contingency_table)
+car$totals <- rowSums(car)
+car$percent <- (car$motor_vehicle_involved / car$totals) * 100
+car <- car %>% tibble::rownames_to_column(var = "intoxication")
+car$intoxication <- factor(x = car$intoxication, levels = c("Sober", "Impaired", "Intoxicated"))
+```
+
+
+
+
+```{r}
+# Injury Severity and Region Scores
+ais_alc_not_intox <- ais[ais$INC_KEY %in% trauma_alc_not_intox$INC_KEY, ]
+ais_region <- table(ais_alc_not_intox$ISSREGION) %>% as.data.frame()
+ais_sev_per_patient <- ais_alc_not_intox %>% dplyr::group_by(INC_KEY) %>% 
+  summarise(mean_AISSEVERITY = mean(AISSEVERITY), max_AISSEVERITY = max(AISSEVERITY), n_injuries = n())
+ais_mean_sev <- mean(ais_sev_per_patient$mean_AISSEVERITY, na.rm = TRUE)
+ais_median_sev <- median(ais_sev_per_patient$mean_AISSEVERITY, na.rm = TRUE)
+ais_mean_max_sev <- mean(ais_sev_per_patient$max_AISSEVERITY, na.rm = TRUE)
+number_injuries_mean <- mean(ais_sev_per_patient$n_injuries, na.rm = TRUE)
+number_injuries_median <- median(ais_sev_per_patient$n_injuries, na.rm = TRUE)
+```
+
+
+
+
+
+
+
+# Filtering for Cannabis and other drug testing and separating based on + status
+
+```{r}
+# Filtering for other drugs
+drug_clean <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_NONE == 1, ]
+drug_cannabis <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_CANNABINOID == 1, ]
+drug_amphet <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_AMPHETAMINE == 1, ]
+drug_barbit <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_BARBITURATE == 1, ]
+drug_benzo <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_BENZODIAZEPINES == 1, ]
+drug_coke <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_COCAINE == 1, ]
+drug_meth <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_METHAMPHETAMINE == 1, ]
+drug_ecstasy <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_ECSTASY == 1, ]
+drug_opioid <- trauma[trauma$DRGSCR_NOTTESTED != 1 & trauma$DRGSCR_OPIOID == 1, ]
+```
+
+```{r}
+# Demographics for drugs
+drug_demo_exporter <- function(df, export_name) {
+  demo <- demographics(trauma_df = df)
+  demo_merged <- Reduce(x = demo, f = "full_join")
+  write_xlsx(x = demo_merged, path = paste0(cwd, "/tables/", export_name, ".xlsx"))
+  return(demo)
+}
+
+demo_clean <- drug_demo_exporter(df = drug_clean, export_name = "drug_clean_demographics_table")
+demo_cannabis <- drug_demo_exporter(df = drug_cannabis, export_name = "drug_cannabis_demographics_table")
+demo_amphet <- drug_demo_exporter(df = drug_amphet, export_name = "drug_amphet_demographics_table")
+demo_barbit <- drug_demo_exporter(df = drug_barbit, export_name = "drug_barbit_demographics_table")
+demo_benzo <- drug_demo_exporter(df = drug_benzo, export_name = "drug_benzo_demographics_table")
+demo_coke <- drug_demo_exporter(df = drug_coke, export_name = "drug_coke_demographics_table")
+demo_meth <- drug_demo_exporter(df = drug_meth, export_name = "drug_meth_demographics_table")
+demo_ecstasy <- drug_demo_exporter(df = drug_ecstasy, export_name = "drug_ecstasy_demographics_table")
+demo_opioid <- drug_demo_exporter(df = drug_opioid, export_name = "drug_opioid_demographics_table")
+```
+
+```{r}
+# glascow coma scores
+drug_df_list <- list("clean" = drug_clean, "cannabis" = drug_cannabis, "amphetamines" = drug_amphet, "barbituates" = drug_barbit, "benzodiazepines" = drug_benzo, "cocaine" = drug_coke, "methamphetamines" = drug_meth, "ecstacy" = drug_ecstasy, "opioids" = drug_opioid)
+
+#print("Mean Glagow Coma Scale:")
+#for (drug in names(drug_df_list)) {
+#  df <- drug_df_list[[drug]]
+#  mean_stat <- mean(df$TOTALGCS, na.rm = TRUE)
+#  mean_stat <- as.character(round(mean_stat, 2))
+#  print(paste0(drug, ": ", mean_stat))
+#}
+
+#print("Mean Injury Severity Score:")
+#for (drug in names(drug_df_list)) {
+#  df <- drug_df_list[[drug]]
+#  mean_stat <- mean(df$ISS, na.rm = TRUE)
+#  mean_stat <- as.character(round(mean_stat, 2))
+#  print(paste0(drug, ": ", mean_stat))
+#}
+
+print("Mean Length of Hospital Stay:")
+for (drug in names(drug_df_list)) {
+  df <- drug_df_list[[drug]]
+  mean_stat <- mean(df$FINALDISCHARGEHRS, na.rm = TRUE)
+  mean_stat <- as.character(round(mean_stat, 2))
+  print(paste0(drug, ": ", mean_stat))
+}
+```
+
+```{r}
+# Injury severity scores (ISS)
+i0 <- mean(trauma_alc$ISS, na.rm = TRUE)
+i1 <- mean(trauma_alc_sober$ISS, na.rm = TRUE)
+i2 <- mean(trauma_alc_impaired$ISS, na.rm = TRUE)
+i3 <- mean(trauma_alc_intox$ISS, na.rm = TRUE)
+```
+
+```{r}
+# Length of stay
+s0 <- mean(trauma_alc$FINALDISCHARGEHRS, na.rm = TRUE)
+s1 <- mean(trauma_alc_sober$FINALDISCHARGEHRS, na.rm = TRUE)
+s2 <- mean(trauma_alc_impaired$FINALDISCHARGEHRS, na.rm = TRUE)
+s3 <- mean(trauma_alc_intox$FINALDISCHARGEHRS, na.rm = TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Graphing clean vs cannabis length of stay (hours)
+trauma_clean$drug <- "clean"
+trauma_cannabis$drug <- "cannabis"
+trauma_violin_df <- rbind(trauma_clean, trauma_cannabis)
+trauma_violin_df$drug <- factor(x = trauma_violin_df$drug, levels = c("clean", "cannabis"))
+
+los_violin <- trauma_violin_df %>% ggplot(aes(x = drug, y = FINALDISCHARGEHRS, fill = drug)) + 
+  geom_boxplot() + 
+  coord_cartesian(ylim = c(0, 280)) +
+  theme_bw()
+los_violin
+```
+
+
+
+
+
+
+
+
+
+
