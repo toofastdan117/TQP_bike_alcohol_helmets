@@ -1,4 +1,4 @@
-<h1 style="border: none">Helmet Use in Pedalcylists Under the Influence of Alcohol</h1>
+<h1 style="border: none">Helmat Use for Cyclists Consuming Alcohol</h1>
 
 <h2 style="border: none">Author: Daniel Brock</h2>
 

@@ -316,7 +316,7 @@ table1 <- trauma_filt %>%
                      cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE)
 
 # Optional export to excel
-#write_xlsx(x = table1, path = paste0(cwd, "/tables/demographics_table1.xlsx"))
+#write_csv(x = table1, file = paste0(cwd, "/tables/table1_demographics.csv"))
 ```
 
 # Making a demographics table comparing alcohol use medical outcomes
@@ -338,7 +338,7 @@ table2 <- trauma_filt %>%
                      add_row_totals = FALSE)
 
 # Optional export to excel
-#write_xlsx(x = table2, path = paste0(cwd, "/tables/outcomes_table2.xlsx"))
+#write_csv(x = table2, path = paste0(cwd, "/tables/table2_outcomes.csv"))
 ```
 
 # Bargraph of helmet use
@@ -370,11 +370,11 @@ helmet_bar_plot
 #ggsave(plot = helmet_bar_plot, filename = paste0(cwd, "/figures/helmet_use_barplot.pdf"), width = 1500, height = 1500, dpi = 300, units = "px")
 ```
 
-# Bargraph of comorbidities
+# Bargraph of comorbidities - start here
 
 ```{r}
 # Data wrangling
-comor_df <- read_xlsx(path = paste0(cwd, "/tables/outcomes_table2.xlsx"), col_names = c("label", "Comorbidities", "Sober", "Impaired", "Intoxicated", "p"))
+comor_df <- read_csv(file = paste0(cwd, "/tables/table2_outcomes.csv"))
 comor_df <- comor_df %>% select(-c(label, p))
 comor_df <- comor_df[comor_df$Comorbidities %in% c("Alcoholism", "Smoker", "Substance Abuse Disorder", "Mental/Personality Disorder"), ]
 comor_df$Comorbidities <- gsub(comor_df$Comorbidities, pattern = "Substance Abuse Disorder", replacement = "Substance Abuse")
