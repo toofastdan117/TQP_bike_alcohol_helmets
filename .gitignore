@@ -1,5 +1,8 @@
-# Ignoring Certain Files
+# Ignoring Files
 .RData
 .Rhistory
 GitHub.Rproj
+
+# Ignoring Folders
 .Rproj.user/
+.ipynb_checkpoints/
