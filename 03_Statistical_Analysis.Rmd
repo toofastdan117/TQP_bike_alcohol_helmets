@@ -408,75 +408,96 @@ comor_bar_plot
 # Yearly plot to get time-data for COVID
 
 ```{r}
-# Yearly alcohol use and helmet use data
-yearly <- trauma_filt %>% group_by(Year, alcohol.use) %>% 
-  summarise(n_count = n(),
-            BAC = mean(ALCOHOLSCREENRESULT))
-year_helmet <- trauma_filt %>% group_by(Year, helmet.factor) %>% 
-  summarise(helmet_counts = n()) 
-year_helmet <- year_helmet %>% pivot_wider(id_cols = c("Year"), names_from = "helmet.factor", values_from = "helmet_counts")
-year_counts <- trauma_filt %>% group_by(Year) %>% 
-  summarise(yearly_counts = n())
+# Function for plotting graphs
+line_plotter <- function(df, x_axis, y_axis, x_label, y_label, plot_title) {
+  line_plot <- df %>% 
+    ggplot(aes(x = x_axis, y = y_axis)) +
+    geom_line(size = 1) +  
+    geom_point(size = 2) +
+    labs(x = x_label, y = y_label, title = plot_title) + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, size = 22),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16))
+  return(line_plot)
+}
+```
 
-# Merging yearly alcohol use and helmet use data
-year_helmet <- merge(year_helmet, year_counts, by = "Year")
-year_helmet$percent <- year_helmet$Helmet / year_helmet$yearly_counts
-year_helmet$category <- "Helmet Use per Year"
-year_helmet$alcohol.use <- "not_available"
-yearly <- merge(yearly, year_counts, by = "Year")
-yearly$percent <- yearly$n_count / yearly$yearly_counts
-yearly$category <- "Intoxication Rates per Year"
+```{r}
+# Getting the number of bike injuries per year
+bike_injury_counts <- trauma %>% group_by(Year) %>% 
+  summarise(n_count = n())
 
 # Yearly bike injury frequency (from python)
-n_year <- table(trauma$Year) %>% as.data.frame()
-n_year$Var1 <- as.numeric(as.character(n_year$Var1))
-n_year$totals <- c(997970, 1043736, 1097190, 1133053, 1209097)
-n_year$percent <- n_year$Freq / n_year$totals
-colnames(n_year) <- c("Year", "Freq", "total_bike_injuries", "percent")
-n_year$category <- "Pedal Cyclist Trauma Frequency"
-n_year$alcohol.use <- "not_available"
+bike_injury_counts$ntdb_totals <- c(997970, 1043736, 1097190, 1133053, 1209097)
 
-# Merging to one dataframe
-yearly_graphing <- bind_rows(yearly, year_helmet, n_year)
-yearly_graphing$category <- factor(x = yearly_graphing$category, levels = c("Pedal Cyclist Trauma Frequency", "Intoxication Rates per Year", "Helmet Use per Year"))
-yearly_graphing$alcohol.use <- factor(x = yearly_graphing$alcohol.use, levels = c("Sober", "Impaired", "Intoxicated", "not_available"))
-yearly_graphing$percent <- yearly_graphing$percent * 100
+# Bike Injury frequency over total injuries
+bike_injury_counts$bike_freq <- (bike_injury_counts$n_count / bike_injury_counts$ntdb_totals) * 100
 
+# Plotting
+bike_injury_counts_plot <- line_plotter(df = bike_injury_counts,
+                                        x_axis = bike_injury_counts$Year, y_axis = bike_injury_counts$bike_freq,
+                                        x_label = "Year", y_label = "Percent Pedalcylist Injuries",
+                                        plot_title = "Pedalcylist Trauma Frequency")
+bike_injury_counts_plot
 
+# Optional Save 
+#ggsave(plot = bike_injury_counts_plot, filename = paste0(cwd, "/figures/yearly_pedalcyclist_trauma_frequency.pdf"), width = 1600, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Getting the intoxication rate
+intox_counts <- trauma_filt %>% group_by(Year, alcohol.use) %>% 
+  summarise(count_intox = n()) %>% 
+  filter(alcohol.use == "Intoxicated")
+year_counts <- trauma_filt %>% group_by(Year) %>% 
+  summarise(count_total = n())
+intox_counts <- merge(intox_counts, year_counts, by = "Year")
+intox_counts$intox_freq <- (intox_counts$count_intox / intox_counts$count_total) * 100
+
+# Plotting
+intox_freq_plot <- line_plotter(df = intox_counts,
+                                x_axis = intox_counts$Year, y_axis = intox_counts$intox_freq,
+                                x_label = "Year", y_label = "Percent Alcohol Intoxication",
+                                plot_title = "Intoxication Rate per Year")
+intox_freq_plot
+
+# Optional Save 
+#ggsave(plot = intox_freq_plot, filename = paste0(cwd, "/figures/yearly_intoxication_frequency.pdf"), width = 1600, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
+# Getting the Helmet Use per year
+helmet_counts <- trauma_filt %>% group_by(Year, helmet.factor) %>% 
+  summarise(count_helmet = n()) %>% 
+  filter(helmet.factor == "Helmet")
+year_counts <- trauma_filt %>% group_by(Year) %>% 
+  summarise(count_total = n())
+helmet_counts <- merge(helmet_counts, year_counts, by = "Year")
+helmet_counts$intox_freq <- (helmet_counts$count_helmet / helmet_counts$count_total) * 100
+
+# Plotting
+helmet_freq_plot <- line_plotter(df = helmet_counts,
+                                x_axis = helmet_counts$Year, y_axis = helmet_counts$intox_freq,
+                                x_label = "Year", y_label = "Percent Helmet Use",
+                                plot_title = "Helmet Use per Year")
+helmet_freq_plot
+
+# Optional Save 
+#ggsave(plot = helmet_freq_plot, filename = paste0(cwd, "/figures/yearly_helmet_use_frequency.pdf"), width = 1600, height = 1500, dpi = 300, units = "px")
+```
+
+```{r}
 # Statistics on yearly intoxication rates
 # Dependent variable of interest
 dependent <- "year.factor"
 # Explanatory & confounding variables
 explanatory <- c("alcohol.use", "helmet.factor")
 # Table
-table4 <- trauma_filt %>% summary_factorlist(dependent, explanatory, 
-                                             p_cat = "chisq", p = TRUE)
-
-# Optional export to excel
-#write_xlsx(x = table4, path = paste0(cwd, "/tables/yearly_analysis_table4.xlsx"))
-```
-
-```{r}
-# Plotting
-`%notin%` <- Negate(`%in%`)
-year_line_plot <- yearly_graphing %>% filter(alcohol.use %notin% c("Sober", "Impaired")) %>% 
-  ggplot(aes(x = Year, y = percent, color = alcohol.use)) +
-  geom_line(size = 1) +  
-  geom_point(size = 2) +
-  facet_wrap(~ category, ncol = 3, scales = "free_y") + 
-  #scale_color_manual(values = c("#fb8804", "#c83760", "#808080")) + 
-  scale_color_manual(values = c("black", "black")) + 
-  labs(x = "Year", title = "Yearly Pedalcyclist Trauma Accidents", color = "Intoxication Status") + 
-  theme_classic() + 
-  theme(plot.title = element_text(hjust = 0.5, size = 20),
-        strip.background = element_blank(),
-        strip.text = element_text(size = 14),
-        axis.text = element_text(size = 14),
-        axis.title = element_text(size = 16))
-year_line_plot
-
-# Optional Save 
-#ggsave(plot = year_line_plot, filename = paste0(cwd, "/figures/yearly_bike_injuries.pdf"), width = 4300, height = 1400, dpi = 300, units = "px")
+yearly_table <- trauma_filt %>% summary_factorlist(dependent, explanatory, 
+                                                   p_cat = "chisq", p = TRUE)
 ```
 
 # Alcohol AIS analysis 
@@ -550,7 +571,7 @@ dependent <- "alcohol.use"
 
 table3.1 <- ais_filt %>% 
   summary_factorlist(dependent, explanatory, 
-                     cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE)
+                     cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE, column = FALSE)
 table3.1$severity <- "All"
 
 table3.2 <- ais_filt_severe %>% 
@@ -562,6 +583,49 @@ table3 <- bind_rows(table3.1, table3.2)
 
 # Optional export to excel
 #write_csv(x = table3, file = paste0(cwd, "/tables/table3_ais.csv"))
+```
+
+```{r}
+# Assessing poly-trauma: patients with more than one injury
+ais_poly_counts <- ais_filt %>% group_by(INC_KEY, alcohol.use) %>% 
+  summarise(poly_trauma = n())
+
+# Explanatory variables
+explanatory <- "alcohol.use"
+
+# Explanatory variable of interest
+dependent <- "poly_trauma"
+
+# Statistics on AIS poly-trauma counts
+ais_poly_table <- ais_poly_counts %>% 
+  summary_factorlist(dependent, explanatory, 
+                     cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE)
+
+# Assessing poly-region-trauma: patients with more than one body region injury
+ais_poly_region_counts <- ais_filt %>% group_by(INC_KEY, alcohol.use, ISSREGION.factor) %>% 
+  summarise(poly_trauma = n())
+ais_poly_region_counts <- ais_poly_region_counts %>% group_by(INC_KEY, alcohol.use) %>% 
+  summarise(poly_trauma = n())
+
+# Explanatory variables
+explanatory <- "alcohol.use"
+
+# Explanatory variable of interest
+dependent <- "poly_trauma"
+
+# Statistics on AIS poly-trauma counts
+ais_poly_region_table <- ais_poly_region_counts %>% 
+  summary_factorlist(dependent, explanatory, 
+                     cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE)
+
+
+# Merging
+ais_poly_table$ais_group <- "Total AIS Injuries"
+ais_poly_region_table$ais_group <- "Number of AIS Body Region Injuries"
+ais_poly <- rbind(ais_poly_table, ais_poly_region_table)
+
+# Exporting
+#write_csv(x = ais_poly, file = paste0(cwd, "/tables/ais_poly-injuries.csv"))
 ```
 
 # Logistic Regression Analysis
@@ -605,7 +669,7 @@ logistic_fit2 <- logistic_fit[[2]] %>% as.character()
 print(logistic_fit2)
 
 # Exporting to excel
-write_csv(x = logistic_fit1, file = paste0(cwd, "/tables/table4_logistic_regression.csv"))
+#write_csv(x = logistic_fit1, file = paste0(cwd, "/tables/table4_logistic_regression.csv"))
 ```
 
 ```{r}
