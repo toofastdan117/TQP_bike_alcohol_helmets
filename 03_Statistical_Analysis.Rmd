@@ -431,7 +431,7 @@ bike_injury_counts <- trauma %>% group_by(Year) %>%
   summarise(n_count = n())
 
 # Yearly bike injury frequency (from python)
-bike_injury_counts$ntdb_totals <- c(997970, 1043736, 1097190, 1133053, 1209097)
+bike_injury_counts$ntdb_totals <- c(997970, 1043736, 1097190, 1133053, 1209097, 1232956) #2017, 2018, 2019, 2020, 2021, 2022
 
 # Bike Injury frequency over total injuries
 bike_injury_counts$bike_freq <- (bike_injury_counts$n_count / bike_injury_counts$ntdb_totals) * 100
