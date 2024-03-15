@@ -1,10 +1,10 @@
 label,levels,Sober,Impaired,Intoxicated,p,severity
-ISS Region,Head & Neck,81484 (82.5),2486 (2.5),14846 (15.0),<0.001,All
-,Chest,37006 (76.5),1431 (3.0),9910 (20.5),,All
-,Abdominal & Pelvic,64501 (87.5),1709 (2.3),7509 (10.2),,All
-,Extremities,19920 (86.1),608 (2.6),2606 (11.3),,All
-,Face,63004 (86.7),1931 (2.7),7746 (10.7),,All
-,External,213699 (84.6),6112 (2.4),32800 (13.0),,All
+ISS Region,Head & Neck,81484 (17.0),2486 (17.4),14846 (19.7),<0.001,All
+,Chest,37006 (7.7),1431 (10.0),9910 (13.1),,All
+,Abdominal & Pelvic,64501 (13.4),1709 (12.0),7509 (10.0),,All
+,Extremities,19920 (4.2),608 (4.3),2606 (3.5),,All
+,Face,63004 (13.1),1931 (13.5),7746 (10.3),,All
+,External,213699 (44.6),6112 (42.8),32800 (43.5),,All
 AISSEVERITY,Mean (SD),1.7 (0.8),1.7 (0.8),1.7 (0.9),0.002,All
 ISS Region,Head & Neck,3886 (78.8),96 (80.7),763 (85.6),<0.001,Severe
 ,Chest,0 (0.0),0 (0.0),0 (0.0),,Severe
