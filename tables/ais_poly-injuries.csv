@@ -1,7 +1,9 @@
 label,levels,unit,value,p,ais_group
-Alcohol Use,Sober,Mean (sd),11.4 (9.5),0.034,Total AIS Injuries
-,Impaired,Mean (sd),11.2 (9.5),,Total AIS Injuries
-,Intoxicated,Mean (sd),11.1 (9.9),,Total AIS Injuries
-Alcohol Use,Sober,Mean (sd),2.5 (1.1),0.018,Number of AIS Body Region Injuries
+Alcohol Use,Sober,Mean (sd),11.5 (9.6),<0.001,Total AIS Injuries
+,Impaired,Mean (sd),11.4 (10.0),,Total AIS Injuries
+,Intoxicated,Mean (sd),11.2 (10.0),,Total AIS Injuries
+,Multi-Drug,Mean (sd),12.2 (10.8),,Total AIS Injuries
+Alcohol Use,Sober,Mean (sd),2.5 (1.1),<0.001,Number of AIS Body Region Injuries
 ,Impaired,Mean (sd),2.4 (1.1),,Number of AIS Body Region Injuries
 ,Intoxicated,Mean (sd),2.4 (1.1),,Number of AIS Body Region Injuries
+,Multi-Drug,Mean (sd),2.5 (1.1),,Number of AIS Body Region Injuries
