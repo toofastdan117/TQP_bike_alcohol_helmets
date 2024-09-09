@@ -1,6 +1,10 @@
 label,levels,Sober,Impaired,Intoxicated,Multi-Drug,p
-Mortality,Deceased,984 (2.2),31 (2.3),170 (2.4),86 (2.7),0.427
+Total Mortality,Deceased,984 (2.2),31 (2.3),170 (2.4),86 (2.7),0.427
 ,Alive,43041 (97.8),1321 (97.7),7030 (97.6),3139 (97.3),
+ED Mortality,Deceased,114 (0.3),3 (0.2),23 (0.3),7 (0.2),0.737
+,Alive,43646 (99.7),1333 (99.8),7112 (99.7),3197 (99.8),
+Hospital Mortality,Deceased,870 (2.5),28 (2.6),147 (2.6),79 (2.8),0.737
+,Alive,34153 (97.5),1041 (97.4),5546 (97.4),2734 (97.2),
 Length of Hospital Stay (days),Median (IQR),3.0 (2.0 to 5.0),3.0 (2.0 to 6.0),3.0 (2.0 to 5.0),4.0 (2.0 to 7.0),<0.001
 Length of ICU Stay (days),Median (IQR),3.0 (2.0 to 5.0),3.0 (2.0 to 6.0),3.0 (2.0 to 6.0),3.0 (2.0 to 6.0),0.004
 Injury Severity Score,Median (IQR),9.0 (5.0 to 14.0),9.0 (5.0 to 14.0),9.0 (5.0 to 14.0),9.0 (5.0 to 17.0),<0.001

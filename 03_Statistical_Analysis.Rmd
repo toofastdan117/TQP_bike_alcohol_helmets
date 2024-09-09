@@ -23,6 +23,8 @@ library(readxl)
 library(writexl)
 library(pheatmap)
 library(zoo)
+library(sjPlot)
+library(DHARMa)
 
 # Setting working directory
 cwd <- getwd()
@@ -264,12 +266,28 @@ trauma <- trauma %>% mutate(
 # Correctly refactoring mortality using ED and Hospital discharge disposition
 alive_dispositions <- c(1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14)
 trauma <- trauma %>% mutate(
-  mortality.factor = case_when(
+  mortality.total = case_when(
     EDDISCHARGEDISPOSITION == 5 | HOSPDISCHARGEDISPOSITION == 5 ~ "Deceased",
     EDDISCHARGEDISPOSITION %in% alive_dispositions | HOSPDISCHARGEDISPOSITION %in% alive_dispositions ~ "Alive"
   ) %>% 
     factor(levels = c("Deceased", "Alive")) %>% 
-    ff_label("Mortality")
+    ff_label("Total Mortality")
+)
+trauma <- trauma %>% mutate(
+  mortality.ED = case_when(
+    EDDISCHARGEDISPOSITION == 5 ~ "Deceased",
+    EDDISCHARGEDISPOSITION %in% alive_dispositions ~ "Alive"
+  ) %>% 
+    factor(levels = c("Deceased", "Alive")) %>% 
+    ff_label("ED Mortality")
+)
+trauma <- trauma %>% mutate(
+  mortality.hospital = case_when(
+    HOSPDISCHARGEDISPOSITION == 5 ~ "Deceased",
+    HOSPDISCHARGEDISPOSITION %in% alive_dispositions ~ "Alive"
+  ) %>% 
+    factor(levels = c("Deceased", "Alive")) %>% 
+    ff_label("Hospital Mortality")
 )
 
 # Refactoring alcohol withdrawal syndrome
@@ -319,6 +337,12 @@ keys_to_keep <- bac_screens[!is.na(bac_screens$alcohol.use.clean), ] %>% pull(IN
 trauma_filt <- trauma_filt %>% filter(INC_KEY %in% keys_to_keep)
 ```
 
+```{r}
+# Optional export to excel
+#write_xlsx(trauma_filt, path = paste0(cwd, "/TQP_Processed/trauma_filtered.xlsx"))
+```
+
+
 # Making a demographics table for alcohol use
 
 ```{r}
@@ -340,8 +364,7 @@ table1 <- trauma_filt %>%
 
 ```{r}
 # Explanatory & confounding variables
-explanatory <- c("mortality.factor", "FINALDISCHARGEDAYS", "TOTALICULOS", "ISS", "ISS.factor", "TOTALGCS", "SBP", "sbp.hypo", 
-                 "HC_ALCOHOLWITHDRAWAL", "HC_CARDARREST", "HC_DVTHROMBOSIS", "HC_EMBOLISM", "HC_KIDNEY", "HC_RESPIRATORY", "HC_SEPSIS", "HC_STROKECVA", "HC_VAPNEUMONIA", "HC_INTUBATION", "HC_UNPLANNEDICU", "HC_RETURNOR")
+explanatory <- c("mortality.total", "mortality.ED", "mortality.hospital", "FINALDISCHARGEDAYS", "TOTALICULOS", "ISS", "ISS.factor", "TOTALGCS", "SBP", "sbp.hypo", "HC_ALCOHOLWITHDRAWAL", "HC_CARDARREST", "HC_DVTHROMBOSIS", "HC_EMBOLISM", "HC_KIDNEY", "HC_RESPIRATORY", "HC_SEPSIS", "HC_STROKECVA", "HC_VAPNEUMONIA", "HC_INTUBATION", "HC_UNPLANNEDICU", "HC_RETURNOR")
 
 # Dependent variable of interest
 dependent <- "alcohol.use"  #helmet.factor
@@ -467,6 +490,56 @@ rate_decline_plot
 
 # Optional Save 
 #ggsave(plot = rate_decline_plot, filename = paste0(cwd, "/figures/rate_decline_plot.pdf"), width = 2200, height = 1500, dpi = 300, units = "px")
+```
+
+# Statistics for dumbell plot - GLM
+
+```{r}
+comor_stats_df <- trauma_filt %>% dplyr::select(ALCOHOLSCREENRESULT, alcohol.use, CC_ALCOHOLISM, CC_SMOKING, CC_SUBSTANCEABUSE, CC_MENTALPERSONALITY, helmet.factor)
+comor_stats_df$alcohol.use <- dplyr::recode(comor_stats_df$alcohol.use, "Sober" = 0, "Impaired" = 1, "Intoxicated" = 2, "Multi-Drug" = 3)
+comor_stats_df$helmet.factor <- dplyr::recode(comor_stats_df$helmet.factor, "Helmet" = 0, "No Helmet" = 1)
+
+# Complete model with all interacting comorbidities
+cc_alc_val_glm <- glm(helmet.factor ~ CC_ALCOHOLISM + CC_SMOKING + CC_SUBSTANCEABUSE + CC_MENTALPERSONALITY + ALCOHOLSCREENRESULT, family = binomial, data = comor_stats_df)
+summary(cc_alc_val_glm)
+
+# GLM alcoholism + alcohol use result values
+cc_alc_val_glm <- glm(helmet.factor ~ ALCOHOLSCREENRESULT + CC_ALCOHOLISM, family = binomial, data = comor_stats_df)
+summary(cc_alc_val_glm)
+
+# GLM alcoholism + alcohol use
+cc_alc_glm <- glm(helmet.factor ~ alcohol.use + CC_ALCOHOLISM, family = binomial, data = comor_stats_df)
+summary(cc_alc_glm)
+
+# GLM smoking + alcohol use
+cc_smo_glm <- glm(helmet.factor ~ alcohol.use + CC_SMOKING, family = binomial, data = comor_stats_df)
+summary(cc_smo_glm)
+
+# GLM substance use disorder + alcohol use
+cc_sud_glm <- glm(helmet.factor ~ alcohol.use + CC_SUBSTANCEABUSE, family = binomial, data = comor_stats_df)
+summary(cc_sud_glm)
+
+# GLM mental/personality disorder + alcohol use
+cc_mpd_glm <- glm(helmet.factor ~ alcohol.use + CC_MENTALPERSONALITY, family = binomial, data = comor_stats_df)
+summary(cc_mpd_glm)
+```
+
+```{r}
+# Modeling model correctness with DHARMa
+simulationOutput <- simulateResiduals(fittedModel = cc_alc_val_glm)
+plot(simulationOutput)
+
+#simulationOutput <- simulateResiduals(fittedModel = cc_alc_glm)
+#plot(simulationOutput)
+
+#simulationOutput <- simulateResiduals(fittedModel = cc_smo_glm)
+#plot(simulationOutput)
+
+#simulationOutput <- simulateResiduals(fittedModel = cc_sud_glm)
+#plot(simulationOutput)
+
+#simulationOutput <- simulateResiduals(fittedModel = cc_mpd_glm)
+#plot(simulationOutput)
 ```
 
 
@@ -704,14 +777,15 @@ trauma_filt_lr <- trauma_filt %>%
     CC_ALCOHOLISM = CC_ALCOHOLISM %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Alcoholism"),
     CC_SMOKING = CC_SMOKING %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Smoking"),
     CC_SUBSTANCEABUSE = CC_SUBSTANCEABUSE %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Substance Abuse"),
-    CC_MENTALPERSONALITY = CC_MENTALPERSONALITY %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Mental/Personality Disorder")
+    CC_MENTALPERSONALITY = CC_MENTALPERSONALITY %>% factor() %>% fct_recode("Negative" = "0", "Positive" = "1") %>% ff_label("Mental/Personality Disorder"),
+    AGEYEARS = AGEYEARS %>% ff_label("Age (years)")
     )
 
 # Performing Logistic Regression and testing different variables in the model of predicting risk factors of helmet wearing
 dependent <- "helmet.factor"
-explanatory <- c("sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
                  "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
-explanatory_multi <- c("race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory_multi <- c("AGEYEARS", "race.factor", "ethnicity.factor", "alcohol.use", 
                        "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
 logistic_fit <- trauma_filt_lr %>% 
   finalfit(dependent, explanatory, explanatory_multi, keep_models = TRUE, metrics = TRUE)
@@ -723,7 +797,7 @@ print(logistic_fit2)
 ```{r}
 # Final logisitic regression to export
 dependent <- "helmet.factor"
-explanatory <- c("sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
                  "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
 logistic_fit <- trauma_filt_lr %>% 
   finalfit(dependent, explanatory, metrics = TRUE)
@@ -738,7 +812,7 @@ print(logistic_fit2)
 ```{r}
 # Odds ratio Plot
 dependent <- "helmet.factor"
-explanatory <- c("sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
                  "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE", "CC_MENTALPERSONALITY")
 
 # Exporting a Odds ratio plot

@@ -6,3 +6,5 @@ GitHub.Rproj
 # Ignoring Folders
 .Rproj.user/
 .ipynb_checkpoints/
+TQP_Files/
+TQP_Processed/
