@@ -19,7 +19,7 @@ library(patchwork)
 library(magrittr)
 library(forcats)
 library(rstatix)
-library(rcompanion)
+#library(rcompanion)
 library(survival)
 library(survminer)
 library(readxl)
@@ -310,6 +310,18 @@ trauma <- trauma %>% mutate(
 )
 ```
 
+```{r}
+# Merging with annotated injury codes and place of injury codes
+inj_cause <- read_xlsx("tables/injury_cause_counts_with_descriptions.xlsx")
+inj_cause$counts <- NULL
+inj_place <- read_xlsx("tables/injury_place_counts_with_descriptions.xlsx")
+inj_place$counts <- NULL
+
+trauma <- merge(trauma, y = inj_cause, on = "PRIMARYECODEICD10")
+#trauma <- merge(trauma, y = inj_place, on = "PLACEOFINJURYCODE")
+```
+
+
 ## 1.3 Filtering for NAs in important variables
 
 ```{r}
@@ -339,8 +351,8 @@ print(paste0("Number of total BAC screens in patients with known info: ", bac_sc
 print(paste0("Number of filtered alcohol/multi-drug BAC screens in patients with known info: ", bac_screens_clean))
 
 # Filtering for only patients with BAC screens with NO other drug use (clean)
-#keys_to_keep <- bac_screens[!is.na(bac_screens$alcohol.use.clean), ] %>% pull(INC_KEY)
-#trauma_filt <- trauma_filt %>% filter(INC_KEY %in% keys_to_keep)
+keys_to_keep <- bac_screens[!is.na(bac_screens$alcohol.use.clean), ] %>% pull(INC_KEY)
+trauma_filt <- trauma_filt %>% filter(INC_KEY %in% keys_to_keep)
 ```
 
 ```{r}
@@ -355,7 +367,7 @@ print(paste0("Number of filtered alcohol/multi-drug BAC screens in patients with
 ```{r}
 # Table on helmet use
 # Explanatory & confounding variables
-explanatory <- c("alcohol.use", "sex.factor", "age.factor", "race.factor", "ethnicity.factor")
+explanatory <- c("alcohol.use", "motor_vehicle", "sex.factor", "age.factor", "race.factor", "ethnicity.factor")
 
 # Dependent variable of interest
 dependent <- "helmet.factor"
@@ -363,7 +375,8 @@ dependent <- "helmet.factor"
 table1 <- trauma_filt %>% 
   summary_factorlist(dependent, explanatory,
                      cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
-                     add_col_totals = TRUE)
+                     add_col_totals = TRUE,
+                     na_include = TRUE)
 
 # Optional export to excel
 #write_xlsx(x = table1, path = "tables/table1_demographics.xlsx")
@@ -372,14 +385,16 @@ table1 <- trauma_filt %>%
 ```{r}
 # Table on alcohol use groups
 # Explanatory & confounding variables
-explanatory <- c("helmet.factor", "sex.factor", "age.factor", "race.factor", "ethnicity.factor")
+explanatory <- c("helmet.factor", "motor_vehicle", "sex.factor", "age.factor", "race.factor", "ethnicity.factor")
 
 # Dependent variable of interest
 dependent <- "alcohol.use"
 
 table1.1 <- trauma_filt %>% 
   summary_factorlist(dependent, explanatory,
-                     cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE)
+                     cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
+                     add_col_totals = TRUE,
+                     na_include = TRUE)
 ```
 
 
@@ -391,6 +406,28 @@ rwf1 <- rwf1[ , c(2,1)]
 pairwiseNominalMatrix(x = table(trauma_filt$alcohol.use, trauma_filt$helmet.factor), compare = "row", fisher = TRUE, chisq = FALSE)
 
 rwf2 <- pairwise_fisher_test(rwf1, p.adjust.method = "fdr", detailed = TRUE)
+chisq.test(rwf1)
+```
+
+```{r}
+# Pairwise comparison stats with row wise fisher's exact test for motor vehicle involvement
+rwf1 <- table(trauma_filt$motor_vehicle, trauma_filt$helmet.factor) %>% as.data.frame.matrix()
+rwf1 <- rwf1[ , c(2,1)]
+
+pairwiseNominalMatrix(x = table(trauma_filt$motor_vehicle, trauma_filt$helmet.factor), compare = "column", fisher = TRUE, chisq = FALSE)
+
+rwf2 <- row_wise_fisher_test(rwf1, p.adjust.method = "fdr", detailed = TRUE)
+chisq.test(rwf1)
+```
+
+```{r}
+# Pairwise comparison stats with row wise fisher's exact test for motor vehicle involvement
+rwf1 <- table(trauma_filt$alcohol.use, trauma_filt$motor_vehicle) %>% as.data.frame.matrix()
+rwf1$unspecified <- NULL
+rwf1 <- rwf1[ , c(2,1)]
+
+rwf2 <- row_wise_fisher_test(rwf1, p.adjust.method = "fdr", detailed = TRUE)
+rwf3 <- pairwise_fisher_test(rwf1, p.adjust.method = "fdr", detailed = TRUE)
 chisq.test(rwf1)
 ```
 
@@ -444,7 +481,8 @@ dependent <- "alcohol.use"  #helmet.factor
 table2 <- trauma_filt %>% 
   summary_factorlist(dependent, explanatory,
                      cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
-                     add_row_totals = FALSE)
+                     add_row_totals = FALSE,
+                     na_include = TRUE)
 
 # Optional export to excel
 #write_csv(x = table2, path = paste0(cwd, "/tables/table2_clinical_presentation.csv"))
@@ -460,7 +498,8 @@ dependent <- "helmet.factor"  #helmet.factor or alcohol.use
 table2.1 <- trauma_filt %>% 
   summary_factorlist(dependent, explanatory,
                      cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
-                     add_col_totals = TRUE)
+                     add_col_totals = TRUE,
+                     na_include = TRUE)
 
 # Optional export to excel
 #write_xlsx(x = table2.1, path = "tables/table2_clinical_presentation.xlsx")
@@ -488,15 +527,30 @@ fisher.test(rwf1)
 ```{r}
 # Length of hospital stay
 wilcox.test(x = trauma_filt$FINALDISCHARGEDAYS, g = trauma_filt$helmet.factor)
+med_hosp_stay1 <- trauma_filt %>% dplyr::filter(helmet.factor == "Helmet")
+med_hosp_stay1 <- mean(med_hosp_stay1$FINALDISCHARGEDAYS, na.rm = TRUE)
+med_hosp_stay2 <- trauma_filt %>% dplyr::filter(helmet.factor == "No Helmet")
+med_hosp_stay2 <- mean(med_hosp_stay2$FINALDISCHARGEDAYS, na.rm = TRUE)
+print(paste0("Mean of Helmeted hospital stay: ", med_hosp_stay1, ". Mean of Non-helmeted hospital stay: ", med_hosp_stay2))
 
 # Length of ICU stay
 wilcox.test(x = trauma_filt$TOTALICULOS, g = trauma_filt$helmet.factor)
+med_hosp_stay1 <- trauma_filt %>% dplyr::filter(helmet.factor == "Helmet")
+med_hosp_stay1 <- mean(med_hosp_stay1$TOTALICULOS, na.rm = TRUE)
+med_hosp_stay2 <- trauma_filt %>% dplyr::filter(helmet.factor == "No Helmet")
+med_hosp_stay2 <- mean(med_hosp_stay2$TOTALICULOS, na.rm = TRUE)
+print(paste0("Mean of Helmeted hospital stay: ", med_hosp_stay1, ". Mean of Non-helmeted hospital stay: ", med_hosp_stay2))
 ```
 
 
 ```{r}
 # ISS
 wilcox.test(x = trauma_filt$ISS, g = trauma_filt$helmet.factor)
+iss_score1 <- trauma_filt %>% dplyr::filter(helmet.factor == "Helmet")
+iss_score1 <- mean(iss_score1$ISS, na.rm = TRUE)
+iss_score2 <- trauma_filt %>% dplyr::filter(helmet.factor == "No Helmet")
+iss_score2 <- mean(iss_score2$ISS, na.rm = TRUE)
+print(paste0("Mean of Helmeted ISS: ", iss_score1, ". Mean of Non-helmeted ISS: ", iss_score2))
 
 # Pairwise fisher test for ISS categories
 rwf1 <- table(trauma_filt$ISS.factor, trauma_filt$helmet.factor)
@@ -569,6 +623,11 @@ c$OR_CI <- paste0(round(c$OR, 2), " [", round(c$conf_low, 2), "-", round(c$conf_
 #write_xlsx(x = c, path = "tables/adverse_outcomes_fisher.xlsx")
 ```
 
+```{r}
+# Sytolic blood pressure (continuous)
+wilcox.test(x = trauma_filt$SBP, g = trauma_filt$helmet.factor)
+```
+
 
 
 
@@ -585,7 +644,8 @@ dependent <- "alcohol.use"  #helmet.factor or alcohol.use
 table3 <- trauma_filt %>% 
   summary_factorlist(dependent, explanatory,
                      cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
-                     add_row_totals = FALSE)
+                     add_row_totals = FALSE,
+                     na_include = TRUE)
 
 # Optional export to excel
 #write_xlsx(x = table3, path = "tables/table3_comorbidities.xlsx")
@@ -601,7 +661,8 @@ dependent <- "helmet.factor"  #helmet.factor or alcohol.use
 table3.1 <- trauma_filt %>% 
   summary_factorlist(dependent, explanatory,
                      cont = "median", p_cont_para = "kruskal.test", p_cat = "chisq", p = TRUE,
-                     add_col_totals = TRUE)
+                     add_col_totals = TRUE,
+                     na_include = TRUE)
 
 # Optional export to excel
 #write_xlsx(x = table3.1, path = "tables/table3_comorbidities.xlsx")
@@ -661,6 +722,8 @@ d$OR_CI <- paste0(round(d$OR, 2), " [", round(d$conf_low, 2), "-", round(d$conf_
 
 # 5. Bargraph of helmet usage
 
+## 5.1 Helmet usage
+
 ```{r}
 # Data wrangling
 helmet_bar_df <- as.data.frame.matrix(table(trauma_filt$alcohol.use, trauma_filt$helmet.factor))
@@ -687,6 +750,36 @@ print(helmet_bar_plot)
 
 # Optional Save 
 #ggsave(plot = helmet_bar_plot, filename = "figures/helmet_use_barplot.pdf", width = 1400, height = 1500, dpi = 300, units = "px")
+```
+
+## 5.2 Motor vehicle involvement
+
+```{r}
+# Data wrangling
+helmet_bar_df <- as.data.frame.matrix(table(trauma_filt$alcohol.use, trauma_filt$motor_vehicle))
+helmet_bar_df <- tibble::rownames_to_column(helmet_bar_df, var = "alcohol")
+helmet_bar_df$alcohol <- factor(helmet_bar_df$alcohol, levels = c("Not Screened", "Sober", "Impaired", "Intoxicated", "Multi-Drug"))
+helmet_bar_df$percent <- (helmet_bar_df$yes / (helmet_bar_df$no + helmet_bar_df$unspecified + helmet_bar_df$yes)) * 100
+helmet_bar_df$percent <- round(helmet_bar_df$percent, digits = 1)
+
+# Barplot
+helmet_bar_plot <- helmet_bar_df %>% ggplot(aes(x = alcohol, y = percent, fill = alcohol, color = "black")) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = percent), vjust = -0.5, size = 4) +
+  scale_y_continuous(limits = c(0, 55), expand = c(0,0)) +
+  scale_fill_manual(values = c("black", "#84888e", "#89C5D3", "#FEDBB2", "#E8ACBD")) + 
+  scale_color_manual(values = "black") +
+  labs(x = "BAC Intoxication Status", y = "Percent Wearing a Helmet (%)", title = "Helmet Usage") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.title = element_text(size = 14),
+        axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 12),
+        legend.position = "none")
+print(helmet_bar_plot)
+
+# Optional Save 
+#ggsave(plot = helmet_bar_plot, filename = "figures/motor_vehicle_barplot.png", width = 1400, height = 1500, dpi = 300, units = "px")
 ```
 
 
@@ -816,7 +909,7 @@ plot(simulationOutput)
 ```{r}
 # Cleaning the trauma df for logistic regression
 trauma_filt_lr <- trauma_filt %>% 
-  select(sex.factor, AGEYEARS, age.factor, race.factor, ethnicity.factor, ALCOHOLSCREENRESULT, alcohol.use, helmet.factor,
+  select(sex.factor, AGEYEARS, age.factor, race.factor, ethnicity.factor, ALCOHOLSCREENRESULT, alcohol.use, helmet.factor, motor_vehicle,
          CC_ALCOHOLISM, CC_SMOKING, CC_SUBSTANCEABUSE) %>% 
   mutate(
     sex.factor = sex.factor %>% factor(levels = c("Female", "Male")) %>% ff_label("Sex"),
@@ -829,7 +922,7 @@ trauma_filt_lr <- trauma_filt %>%
 
 # Performing Logistic Regression and testing different variables in the model of predicting risk factors of helmet wearing
 dependent <- "helmet.factor"
-explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", "motor_vehicle",
                  "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE")
 explanatory_multi <- c("AGEYEARS", "race.factor", "ethnicity.factor", "alcohol.use", 
                        "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE")
@@ -843,7 +936,7 @@ print(logistic_fit2)
 ```{r}
 # Final logisitic regression to export
 dependent <- "helmet.factor"
-explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", "motor_vehicle",
                  "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE")
 logistic_fit <- trauma_filt_lr %>% 
   finalfit(dependent, explanatory, metrics = TRUE)
@@ -858,7 +951,7 @@ print(logistic_fit2)
 ```{r}
 # Odds ratio Plot
 dependent <- "helmet.factor"
-explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", 
+explanatory <- c("AGEYEARS", "sex.factor", "race.factor", "ethnicity.factor", "alcohol.use", "motor_vehicle",
                  "CC_ALCOHOLISM", "CC_SMOKING", "CC_SUBSTANCEABUSE")
 
 # Exporting a Odds ratio plot
@@ -1056,13 +1149,15 @@ dependent <- "helmet.factor"  #alcohol.use or helmet.factor
 table4.1 <- ais_filt %>% 
   summary_factorlist(dependent, explanatory, 
                      cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE, column = TRUE,
-                     add_col_totals = TRUE)
+                     add_col_totals = TRUE,
+                     na_include = TRUE)
 table4.1$severity <- "All"
 
 table4.2 <- ais_filt_severe %>% 
   summary_factorlist(dependent, explanatory, 
                      cont = "mean", p_cont_para = "aov", p_cat = "chisq", p = TRUE,
-                     add_col_totals = TRUE)
+                     add_col_totals = TRUE,
+                     na_include = TRUE)
 table4.2$severity <- "Severe"
 
 table4 <- bind_rows(table4.1, table4.2)
